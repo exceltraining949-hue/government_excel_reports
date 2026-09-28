@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GovData Analytics — Government Data Analytics Portal</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%230B3D2E'/><rect x='22' y='50' width='13' height='28' fill='%23C9A227'/><rect x='44' y='36' width='13' height='42' fill='%23C9A227'/><rect x='66' y='22' width='13' height='56' fill='%23fff'/></svg>">
+</head>
+<body>
+
+<!-- ================= HEADER ================= -->
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <svg class="emblem" viewBox="0 0 100 100" aria-hidden="true">
+        <path d="M50 4 L88 16 V48 C88 72 70 88 50 96 C30 88 12 72 12 48 V16 Z" fill="#0B3D2E" stroke="#C9A227" stroke-width="3"/>
+        <rect x="30" y="55" width="9" height="20" fill="#C9A227"/>
+        <rect x="45" y="45" width="9" height="30" fill="#C9A227"/>
+        <rect x="60" y="33" width="9" height="42" fill="#fff"/>
+        <path d="M30 40 C36 30 46 28 52 33 C58 28 66 30 70 38" stroke="#C9A227" stroke-width="3" fill="none" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <h1>GovData <span>Analytics</span></h1>
+        <p class="tagline" data-i18n="tagline">Government Data Analytics Portal — Excel/CSV upload karein, AI Agent poora analysis khud karega</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <div class="lang-toggle" role="group" aria-label="Language">
+        <button id="langEN" class="lang-btn active" onclick="setLang('en')">EN</button>
+        <button id="langUR" class="lang-btn" onclick="setLang('ur')">اردو</button>
+      </div>
+    </div>
+  </div>
+  <div class="gold-line"></div>
+</header>
+
+<main class="container">
+
+  <!-- ================= STEPPER ================= -->
+  <section class="stepper" id="stepper">
+    <div class="step active" data-step="1">
+      <div class="step-dot">1</div><div class="step-label" data-i18n="step1">Upload File</div>
+    </div>
+    <div class="step-line"></div>
+    <div class="step" data-step="2">
+      <div class="step-dot">2</div><div class="step-label" data-i18n="step2">Auto-Inspect</div>
+    </div>
+    <div class="step-line"></div>
+    <div class="step" data-step="3">
+      <div class="step-dot">3</div><div class="step-label" data-i18n="step3">Clean &amp; Analyze</div>
+    </div>
+    <div class="step-line"></div>
+    <div class="step" data-step="4">
+      <div class="step-dot">4</div><div class="step-label" data-i18n="step4">Report &amp; Dashboard</div>
+    </div>
+  </section>
+
+  <!-- ================= UPLOAD CARD ================= -->
+  <section class="card upload-card" id="uploadCard">
+    <h2 class="card-title"><span class="ico">📁</span><span data-i18n="uploadTitle">Upload Your Data File</span></h2>
+    <p class="muted" data-i18n="uploadHint">Excel (.xlsx, .xls, .xlsm) ya CSV file — max 25 MB. Raw data me koi tabdeeli nahi hogi.</p>
+
+    <div class="dropzone" id="dropzone" tabindex="0">
+      <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+      <p class="dz-main" data-i18n="dzMain">Drag &amp; drop file here</p>
+      <p class="dz-sub" data-i18n="dzSub">ya nichay button se browse karein</p>
+      <button class="btn btn-secondary" id="browseBtn" data-i18n="browse">Browse Files</button>
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.xlsm,.csv" hidden>
+    </div>
+
+    <div class="file-chip" id="fileChip" hidden>
+      <span class="chip-ico">📄</span>
+      <div class="chip-meta">
+        <strong id="chipName"></strong>
+        <span class="muted" id="chipSize"></span>
+      </div>
+      <button class="chip-x" id="chipRemove" title="Remove">✕</button>
+    </div>
+
+    <div class="options" id="optionsBox">
+      <label class="opt"><input type="checkbox" id="optStandardize" checked>
+        <span data-i18n="opt1">Text case &amp; spacing standardize karo</span></label>
+      <label class="opt"><input type="checkbox" id="optFill" checked>
+        <span data-i18n="opt2">Blank categories ko "MISSING" mark karo</span></label>
+      <label class="opt"><input type="checkbox" id="optDedup">
+        <span data-i18n="opt3">Exact duplicate rows remove karo (Cleaned sheet se)</span></label>
+    </div>
+
+    <div class="sheet-pick" id="sheetPick" hidden>
+      <label for="sheetSelect" data-i18n="sheetLabel">Worksheet:</label>
+      <select id="sheetSelect"></select>
+      <button class="btn btn-outline" id="rerunBtn" data-i18n="rerun">Re-analyze</button>
+    </div>
+
+    <div class="upload-actions">
+      <button class="btn btn-primary btn-lg" id="analyzeBtn" disabled data-i18n="analyzeBtn">⚡ Analyze Karein (AI Agent)</button>
+    </div>
+
+    <div class="progress-wrap" id="progressWrap" hidden>
+      <div class="progress-msg" id="progressMsg">Inspecting workbook…</div>
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      <ul class="progress-steps" id="progressSteps">
+        <li data-i18n="ps1">Workbook inspect ho rahi hai…</li>
+        <li data-i18n="ps2">Data quality check (duplicates, missing, errors)…</li>
+        <li data-i18n="ps3">Cleaning &amp; standardization…</li>
+        <li data-i18n="ps4">Summaries, rankings &amp; anomaly detection…</li>
+        <li data-i18n="ps5">Excel report &amp; dashboard generate ho raha hai…</li>
+      </ul>
+    </div>
+
+    <div class="alert alert-error" id="errorBox" hidden></div>
+  </section>
+
+  <!-- ================= RESULTS ================= -->
+  <section id="results" hidden>
+
+    <!-- download banner -->
+    <div class="download-banner card">
+      <div>
+        <h3 data-i18n="reportReady">✅ Government Analytics Report tayyar hai</h3>
+        <p class="muted" id="reportMeta"></p>
+      </div>
+      <a class="btn btn-primary btn-lg" id="downloadBtn" href="#" download>
+        ⬇ <span data-i18n="download">Excel Report Download</span>
+      </a>
+    </div>
+
+    <!-- KPI cards -->
+    <div class="kpi-grid" id="kpiGrid"></div>
+
+    <!-- charts -->
+    <div class="charts-grid" id="chartsGrid"></div>
+
+    <!-- agent command bar -->
+    <div class="card cmd-card">
+      <h2 class="card-title"><span class="ico">🤖</span><span data-i18n="agentTitle">AI Agent Command Box</span></h2>
+      <p class="muted" data-i18n="agentHint">Roman Urdu ya English me likhein — misal: "top 10 dikhao", "department wise summary", "million me dikhaao", "duplicates dikhao"</p>
+      <div class="cmd-row">
+        <input id="cmdInput" type="text" placeholder="e.g. top 10 employees dikhao…" autocomplete="off">
+        <button class="btn btn-primary" id="cmdGo" data-i18n="cmdGo">Run</button>
+      </div>
+      <div class="chips" id="cmdChips">
+        <button class="chip" data-cmd="top 10">Top 10</button>
+        <button class="chip" data-cmd="department wise summary">Department-wise</button>
+        <button class="chip" data-cmd="district wise summary">District-wise</button>
+        <button class="chip" data-cmd="monthly trend">Monthly Trend</button>
+        <button class="chip" data-cmd="duplicates dikhao">Duplicates</button>
+        <button class="chip" data-cmd="missing values">Missing Values</button>
+        <button class="chip" data-cmd="outliers dikhao">Anomalies</button>
+        <button class="chip" data-cmd="million me dikhao">Million format</button>
+        <button class="chip" data-cmd="budget vs expenditure">Budget vs Expenditure</button>
+        <button class="chip" data-cmd="summary dikhao">Summary</button>
+      </div>
+      <div class="agent-reply" id="agentReply" hidden></div>
+    </div>
+
+    <!-- number format switch -->
+    <div class="fmt-bar" id="fmtBar">
+      <span class="muted" data-i18n="numberFormat">Numbers:</span>
+      <button class="fmt-btn active" data-fmt="full" data-i18n="fmtFull">Full</button>
+      <button class="fmt-btn" data-fmt="k">Thousands (K)</button>
+      <button class="fmt-btn" data-fmt="m">Millions (M)</button>
+      <button class="fmt-btn" data-fmt="b">Billions (B)</button>
+    </div>
+
+    <!-- tabs -->
+    <div class="card tab-card">
+      <div class="tabs" id="tabs">
+        <button class="tab active" data-tab="quality" data-i18n="tabQuality">Data Quality</button>
+        <button class="tab" data-tab="summary" data-i18n="tabSummary">Summary &amp; Pivots</button>
+        <button class="tab" data-tab="rank" data-i18n="tabRank">Top / Bottom 50</button>
+        <button class="tab" data-tab="exceptions" data-i18n="tabExc">Exceptions</button>
+        <button class="tab" data-tab="changes" data-i18n="tabChanges">Change Log</button>
+        <button class="tab" data-tab="assume" data-i18n="tabAssume">Assumptions</button>
+        <button class="tab" data-tab="columns" data-i18n="tabCols">Columns</button>
+      </div>
+      <div class="tab-body" id="tabBody"></div>
+    </div>
+
+    <!-- sheet profile note -->
+    <p class="muted small" id="sheetsNote"></p>
+  </section>
+</main>
+
+<footer class="footer">
+  <p data-i18n="footer1">🔐 Aap ki file confidential rehti hai — analysis sirf is server par hota hai, kahin bahj nahi jati.</p>
+  <p class="muted" data-i18n="footer2">GovData Analytics Portal · Automated Excel analysis for government offices · Koi data fabricate nahi hota — har adad uploaded file se calculate hua hai.</p>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

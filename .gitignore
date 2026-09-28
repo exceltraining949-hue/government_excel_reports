@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# User uploads & generated reports (private data - never commit)
+uploads/
+*_report*.xlsx
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
