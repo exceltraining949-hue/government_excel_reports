@@ -880,6 +880,8 @@ def analyze(raw_df, options=None, context=None):
     # ---------------- 18. validation rules & power query recipe ----------------
     validation_rules = build_validation_rules(cleaned, col_meta)
     powerquery = generate_powerquery(cleaned, col_meta, coerced_numeric_cols, options, ctx)
+    kpis['sheet_name'] = ctx.get('sheet_name', '')
+    mgmt_summary = build_management_summary(kpis, pivots, budget, issues, trend, top50)
 
     # builder-friendly column lists
     categorical_columns = []
@@ -911,7 +913,7 @@ def analyze(raw_df, options=None, context=None):
         'options_applied': options, 'ctx': ctx,
         'validation_rules': validation_rules, 'powerquery': powerquery,
         'categorical_columns': categorical_columns, 'numeric_columns': numeric_columns,
-        'coerced_numeric_cols': coerced_numeric_cols,
+        'coerced_numeric_cols': coerced_numeric_cols, 'mgmt_summary': mgmt_summary,
     }
     return result
 
@@ -956,6 +958,8 @@ def to_payload(result, job_id, filename, sheet_name, sheets_info, download_url):
         'numeric_columns': result.get('numeric_columns', []),
         'join_report': result.get('join_report'),
         'is_merged': bool(result.get('merged_data') is not None),
+        'mgmt_summary': result.get('mgmt_summary', []),
+        'lookup_report': result.get('lookup_report'),
     }
 
 
@@ -1339,3 +1343,66 @@ def generate_powerquery(cleaned, col_meta, coerced_numeric_cols, options, ctx):
     ui_steps.append('Home → Close & Load To… → "PivotTable Report" — ab pivot khud banayein, ya "Table" par load karein.')
     ui_steps.append('Refresh: Data → Refresh All (naya data aane par sirf refresh karna hota hai — formulas dobara banane ki zaroorat nahi).')
     return {'m_code': m_code, 'ui_steps': ui_steps, 'file_name': file_name, 'sheet': sheet}
+
+
+# ================================================================== #
+# MANAGEMENT SUMMARY - auto executive summary (FACT / OBSERVATION style)
+# ================================================================== #
+def build_management_summary(kpis, pivots, budget, issues, trend, top50):
+    """Auto-generate a concise management summary. Only states what the data shows."""
+    lines = []
+    total = kpis.get('total_records')
+    if total is not None:
+        lines.append(f"FACT: Dataset contains {total:,} records across {kpis.get('columns', '?')} fields"
+                     + (f" (sheet \"{kpis.get('sheet_name', '')}\")." if kpis.get('sheet_name') else '.'))
+    if kpis.get('date_range'):
+        lines.append(f"FACT: Reference period {kpis['date_range'][0]} to {kpis['date_range'][1]}.")
+    if budget:
+        lines.append(f"FACT: Total budget {_fmt_big(budget['total_budget'])}; expenditure {_fmt_big(budget['total_expenditure'])}.")
+        if budget.get('utilization') is not None:
+            lines.append(f"CALCULATION: Utilisation {budget['utilization']}% "
+                         f"(expenditure / budget). Remaining: {_fmt_big(budget.get('remaining'))}.")
+        if budget.get('above_budget_count'):
+            lines.append(f"POTENTIAL ISSUE: {budget['above_budget_count']} record(s) where expenditure exceeds the budget allocation - requires review.")
+    if kpis.get('main_metric') and kpis.get('main_metric_total') is not None:
+        lines.append(f"CALCULATION: Total {kpis['main_metric']} = {_fmt_big(kpis['main_metric_total'])}.")
+    if pivots:
+        p0 = pivots[0]
+        if p0['rows']:
+            top = p0['rows'][0]
+            share = f" ({top['pct']}% of total)" if top.get('pct') is not None and p0.get('has_measure') else f" ({round(top['count'] / max(total or 1, 1) * 100, 1)}% of records)"
+            lines.append(f"OBSERVATION: Largest {p0['dimension']} is \"{top['label']}\"{share}.")
+    if trend and len(trend.get('labels', [])) >= 2:
+        vals = [v for v in trend['values'] if v is not None]
+        if len(vals) >= 2 and vals[0]:
+            last, first = vals[-1], vals[0]
+            chg = (last - first) / abs(first) * 100 if first else None
+            if chg is not None:
+                direction = 'increased' if chg > 0 else ('decreased' if chg < 0 else 'stayed flat')
+                lines.append(f"OBSERVATION: Monthly {trend['measure'] or 'record count'} {direction} from {trend['labels'][0]} ({_fmt_big(first)}) "
+                             f"to {trend['labels'][-1]} ({_fmt_big(last)}) - change {chg:+.1f}% over the period.")
+    if kpis.get('duplicate_rows'):
+        lines.append(f"POTENTIAL ISSUE: {kpis['duplicate_rows']:,} exact duplicate record(s) - kept for audit, not deleted.")
+    if kpis.get('missing_cells'):
+        lines.append(f"DATA LIMITATION: {kpis['missing_cells']:,} missing cells ({kpis.get('missing_pct')}% of all cells). No values were invented.")
+    if kpis.get('outliers'):
+        lines.append(f"POTENTIAL ISSUE: {kpis['outliers']} statistical anomal{('y' if kpis['outliers'] == 1 else 'ies')} flagged (IQR) - requires review, not proof of error.")
+    lines.append("NOTE: Every figure above is computed directly from the uploaded file; nothing is estimated.")
+    return lines
+
+
+def _fmt_big(v):
+    if v is None:
+        return 'not available'
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    av = abs(v)
+    if av >= 1e9:
+        return f"{v / 1e9:,.2f}B"
+    if av >= 1e6:
+        return f"{v / 1e6:,.2f}M"
+    if av >= 1e3:
+        return f"{v / 1e3:,.1f}K"
+    return f"{v:,.0f}"

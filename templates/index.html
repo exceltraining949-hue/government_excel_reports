@@ -128,12 +128,6 @@
       </a>
     </div>
 
-    <!-- KPI cards -->
-    <div class="kpi-grid" id="kpiGrid"></div>
-
-    <!-- charts -->
-    <div class="charts-grid" id="chartsGrid"></div>
-
     <!-- agent command bar -->
     <div class="card cmd-card">
       <h2 class="card-title"><span class="ico">🤖</span><span data-i18n="agentTitle">AI Agent Command Box</span></h2>
@@ -154,6 +148,8 @@
         <button class="chip" data-cmd="budget vs expenditure">Budget vs Expenditure</button>
         <button class="chip" data-cmd="summary dikhao">Summary</button>
         <button class="chip" data-cmd="pivot banao">Pivot Builder</button>
+        <button class="chip" data-cmd="vlookup laga do">VLOOKUP / XLOOKUP</button>
+        <button class="chip" data-cmd="dashboard dikhao">Dashboard</button>
         <button class="chip" data-cmd="data model dikhao">Data Model</button>
         <button class="chip" data-cmd="power query dikhao">Power Query</button>
         <button class="chip" data-cmd="validation rules dikhao">Validation Rules</button>
@@ -173,9 +169,11 @@
     <!-- tabs -->
     <div class="card tab-card">
       <div class="tabs" id="tabs">
-        <button class="tab active" data-tab="quality" data-i18n="tabQuality">Data Quality</button>
+        <button class="tab active" data-tab="dashboard" data-i18n="tabDash">📈 Dashboard</button>
+        <button class="tab" data-tab="quality" data-i18n="tabQuality">Data Quality</button>
         <button class="tab" data-tab="summary" data-i18n="tabSummary">Summary &amp; Pivots</button>
         <button class="tab" data-tab="pivot" data-i18n="tabPivot">📊 Pivot Builder</button>
+        <button class="tab" data-tab="lookup" data-i18n="tabLookup">🔍 Lookup (V/X)</button>
         <button class="tab" data-tab="model" data-i18n="tabModel">🔗 Data Model</button>
         <button class="tab" data-tab="valid" data-i18n="tabValid">✅ Validation</button>
         <button class="tab" data-tab="pq" data-i18n="tabPQ">⚡ Power Query</button>

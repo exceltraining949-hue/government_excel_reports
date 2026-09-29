@@ -279,6 +279,23 @@ def build_report(result, out_path):
         dash.column_dimensions[get_column_letter(col)].width = 12
     dash.sheet_view.showGridLines = False
 
+    # management summary block (auto executive summary)
+    mgmt = result.get('mgmt_summary') or []
+    if mgmt:
+        rr += 1
+        c = dash.cell(row=rr, column=1, value='MANAGEMENT SUMMARY (auto-generated from the data)')
+        c.font = Font(bold=True, size=12, color='FFFFFF')
+        c.fill = SEC_FILL
+        dash.merge_cells(start_row=rr, start_column=1, end_row=rr, end_column=12)
+        rr += 1
+        for line in mgmt:
+            cell = dash.cell(row=rr, column=1, value='• ' + line)
+            cell.alignment = Alignment(wrap_text=True, vertical='top')
+            dash.merge_cells(start_row=rr, start_column=1, end_row=rr, end_column=12)
+            dash.row_dimensions[rr].height = 16
+            rr += 1
+        rr += 1
+
     # chart data sheet
     cd = wb.create_sheet('Chart_Data')
     cdr = _sheet_title(cd, 'Chart backing data', 'Referenced by Dashboard charts', span=6)
@@ -698,15 +715,25 @@ def build_report(result, out_path):
             except Exception:
                 pass
 
-    # ---------------- Merged_Data (join result) ---------------- #
+    # ---------------- Merged_Data (join / lookup result) ---------------- #
     merged_df = result.get('merged_data')
     if merged_df is not None:
         jr = result.get('join_report') or {}
+        lr = result.get('lookup_report') or {}
+        if jr:
+            subtitle = (f"{jr.get('left_sheet', '?')} [{jr.get('left_key', '?')}] "
+                        f"{str(jr.get('join_type', 'left')).upper()}-joined with "
+                        f"{jr.get('right_sheet', '?')} [{jr.get('right_key', '?')}] - {jr.get('result_rows', '?')} rows. "
+                        f"Full report in Assumptions sheet.")
+        elif lr:
+            subtitle = (f"Lookup column \"{lr.get('new_column', '?')}\" fetched from \"{lr.get('lookup_sheet', '?')}\" "
+                        f"({lr.get('lookup_key', '?')} = {lr.get('return_col', '?')}); "
+                        f"matched {lr.get('matched', '?')}/{lr.get('total_rows', '?')} rows. "
+                        f"Detail in Assumptions sheet.")
+        else:
+            subtitle = 'Combined dataset.'
         ws = wb.create_sheet('Merged_Data')
-        _sheet_title(ws, 'MERGED DATA (JOIN RESULT)',
-                     f"{jr.get('left_sheet','?')} [{jr.get('left_key','?')}] LEFT-joined with "
-                     f"{jr.get('right_sheet','?')} [{jr.get('right_key','?')}] - {jr.get('result_rows','?')} rows. "
-                     'Full join report in Assumptions sheet.', span=10)
+        _sheet_title(ws, 'COMBINED DATA (JOIN / LOOKUP RESULT)', subtitle, span=10)
         _write_table(ws, merged_df, 3,
                      number_cols={c for c in merged_df.columns if str(merged_df[c].dtype) in ('int64', 'float64', 'Int64')},
                      date_cols={c for c in merged_df.columns if 'datetime' in str(merged_df[c].dtype)})

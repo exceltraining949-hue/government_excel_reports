@@ -27,6 +27,7 @@ const I18N = {
     tabQuality: "Data Quality", tabSummary: "Summary & Pivots", tabRank: "Top / Bottom 50",
     tabExc: "Exceptions", tabChanges: "Change Log", tabAssume: "Assumptions", tabCols: "Columns",
     tabPivot: "Pivot Builder", tabModel: "Data Model", tabValid: "Validation", tabPQ: "Power Query",
+    tabDash: "Dashboard", tabLookup: "Lookup (V/X)",
     footer1: "🔐 Your file stays confidential — analysis happens only on this server, nothing is sent elsewhere.",
     footer2: "GovData Analytics Portal · Automated Excel analysis for government offices · No data is fabricated — every figure is computed from the uploaded file."
   },
@@ -54,6 +55,7 @@ const I18N = {
     tabQuality: "ڈیٹا کوالٹی", tabSummary: "خلاصہ و تجزیہ", tabRank: "ٹاپ / بٹم 50",
     tabExc: "استثنائات", tabChanges: "تبدیلی رپورٹ", tabAssume: "مفروضات", tabCols: "کالم",
     tabPivot: "پیوٹ بلڈر", tabModel: "ڈیٹا ماڈل", tabValid: "ویلیڈیشن", tabPQ: "پاور کوری",
+    tabDash: "ڈیش بورڈ", tabLookup: "لک اپ",
     footer1: "🔐 آپ کی فائل رازدارانہ ہے — تجزیہ صرف اسی سرور پر ہوتا ہے۔",
     footer2: "گوو ڈیٹا اینالیٹکس پورٹل · حکومتی دفاتر کے لیے خودکار ایکسل تجزیہ · کوئی ڈیٹا گھڑا نہیں جاتا۔"
   }
@@ -74,7 +76,7 @@ window.setLang = setLang;
 /* ---------------- state ---------------- */
 let PAYLOAD = null;
 let NUMFMT = "full";
-let CURRENT_TAB = "quality";
+let CURRENT_TAB = "dashboard";
 
 /* ---------------- helpers ---------------- */
 const $ = id => document.getElementById(id);
@@ -221,8 +223,6 @@ function renderResults() {
   $("downloadBtn").href = p.download_url;
   $("reportMeta").textContent = `${p.file_name} → sheet "${p.sheet_name}" · ${p.kpis.total_records.toLocaleString()} records × ${p.kpis.columns} columns · analyzed ${new Date().toLocaleString()}`;
   renderSheetPicker();
-  renderKpis();
-  renderCharts();
   renderTab(CURRENT_TAB);
   $("fmtBar").style.display = "flex";
 }
@@ -418,6 +418,8 @@ function renderTab(tab) {
   else if (tab === "assume") body.innerHTML = tabAssume(p);
   else if (tab === "columns") body.innerHTML = tabColumns(p);
   else if (tab === "pivot") { body.innerHTML = tabPivotBuilder(p); wirePivotBuilder(); }
+  else if (tab === "dashboard") { body.innerHTML = tabDashboard(p); renderKpis(); renderCharts(); }
+  else if (tab === "lookup") { body.innerHTML = tabLookup(p); wireLookup(); }
   else if (tab === "model") { body.innerHTML = tabModel(p); wireModel(); }
   else if (tab === "valid") body.innerHTML = tabValidation(p);
   else if (tab === "pq") { body.innerHTML = tabPowerQuery(p); wirePowerQuery(); }
@@ -827,7 +829,7 @@ document.querySelectorAll(".fmt-btn").forEach(b => b.addEventListener("click", (
   document.querySelectorAll(".fmt-btn").forEach(x => x.classList.remove("active"));
   b.classList.add("active");
   NUMFMT = b.dataset.fmt;
-  renderKpis(); renderCharts(); renderTab(CURRENT_TAB);
+  renderTab(CURRENT_TAB);
 }));
 
 /* ---------------- AI agent command box ---------------- */
@@ -925,7 +927,7 @@ function runCommand() {
   }
   // trend
   if (/(trend|monthly|mahana|mahine|month)/.test(raw)) {
-    if (p.trend) { document.querySelector(".charts-grid").scrollIntoView({ behavior: "smooth" }); agentSay(`Monthly trend chart dikhla di — "${esc(p.trend.date_col)}" ke hisab se${p.trend.measure ? `, ${esc(p.trend.measure)} ka` : ""}.`); }
+    if (p.trend) { activateTab("dashboard"); agentSay(`Monthly trend chart dikhla di — "${esc(p.trend.date_col)}" ke hisab se${p.trend.measure ? `, ${esc(p.trend.measure)} ka` : ""}.`); }
     else agentSay("Monthly trend nahi ban sakti — is data me koi date column detect nahi hui (ya dates parse nahi ho sakin).");
     return;
   }
@@ -970,5 +972,190 @@ function runCommand() {
     agentSay(`Validation rules khol di — ${PAYLOAD.validation_rules ? PAYLOAD.validation_rules.length : 0} rules aap ke data se generate hui hain aur Excel report ki Cleaned_Data sheet me actually apply ho chuki hain (dropdowns + range checks).`);
     return;
   }
-  agentSay('Ye command samajh nahi aayi. Yehi try karein: <b>"top 10"</b>, <b>"department wise summary"</b>, <b>"pivot banao"</b>, <b>"data model"</b>, <b>"power query"</b>, <b>"validation rules"</b>, <b>"duplicates dikhao"</b>, <b>"missing values"</b>, <b>"outliers"</b>, <b>"monthly trend"</b>, <b>"million me dikhao"</b>, <b>"budget vs expenditure"</b>, <b>"summary"</b>.');
+  // lookup
+  if (/(vlookup|xlookup|lookup|look ?up|dhoondo|nikalo|laao|bring)/.test(raw)) {
+    activateTab("lookup");
+    agentSay("Lookup (VLOOKUP/XLOOKUP) tool khol diya — key column, lookup sheet aur return column chunein. Preview ke baad 'Apply & Re-analyze' se naya column poore analysis me shamil ho jayega. Excel formulas bhi milengi jo aap khud paste kar sakein.");
+    return;
+  }
+  // dashboard
+  if (/(dashboard|dash board|board|summary view|manzar)/.test(raw)) {
+    activateTab("dashboard");
+    agentSay("Dashboard khol diya — KPI cards, charts, management summary aur quick tables ek jagah.");
+    return;
+  }
+  agentSay('Ye command samajh nahi aayi. Yehi try karein: <b>"top 10"</b>, <b>"department wise summary"</b>, <b>"pivot banao"</b>, <b>"vlookup laga do"</b>, <b>"dashboard"</b>, <b>"data model"</b>, <b>"power query"</b>, <b>"validation rules"</b>, <b>"duplicates dikhao"</b>, <b>"missing values"</b>, <b>"outliers"</b>, <b>"monthly trend"</b>, <b>"million me dikhao"</b>, <b>"budget vs expenditure"</b>, <b>"summary"</b>.');
+}
+
+/* ================= DASHBOARD TAB ================= */
+function tabDashboard(p) {
+  let summaryHtml = "";
+  const mg = p.mgmt_summary || [];
+  if (mg.length) {
+    summaryHtml = `<div class="section-h">📝 Management Summary (auto)</div>
+      <div class="join-banner" style="display:flex;flex-direction:column;gap:4px">
+        ${mg.map(line => {
+          const cls = line.startsWith("POTENTIAL ISSUE") ? 'style="color:var(--red);font-weight:600"'
+                       : line.startsWith("DATA LIMITATION") ? 'style="color:var(--amber)"'
+                       : line.startsWith("OBSERVATION") ? 'style="color:var(--green-800)"' : "";
+          return `<div ${cls}>${esc(line)}</div>`;
+        }).join("")}
+      </div>`;
+  }
+  let quickTables = "";
+  if (p.status_dist) {
+    const total = p.status_dist.rows.reduce((a, r) => a + r.count, 0) || 1;
+    quickTables += `<div class="section-h">📌 ${esc(p.status_dist.column)} distribution</div>` +
+      tableHTML([{ label: p.status_dist.column }, { label: "Records", num: true }, { label: "Share %", num: true }],
+        p.status_dist.rows.map(r => [esc(r.label), r.count.toLocaleString(), fmtPct(r.count / total * 100)]));
+  }
+  if (p.top50 && p.top50.rows.length) {
+    const showCols = p.top50.columns.slice(0, 4);
+    quickTables += `<div class="section-h">🏆 Top 5 by ${esc(p.kpis.main_metric)}</div>` +
+      tableHTML([{ label: "#" }, ...showCols.map(c => ({ label: c, num: c === p.kpis.main_metric }))],
+        p.top50.rows.slice(0, 5).map(r => [r.rank, ...showCols.map(c => typeof r[c] === "number" ? fmtNum(r[c]) : esc(r[c]))]));
+  }
+  if (p.budget && p.budget.per_dept && p.budget.per_dept.length) {
+    quickTables += `<div class="section-h">💰 Budget position by department (top 6)</div>` +
+      tableHTML([{ label: "Department" }, { label: "Budget", num: true }, { label: "Expenditure", num: true },
+                 { label: "Remaining", num: true }, { label: "Utilization %", num: true }],
+        p.budget.per_dept.slice(0, 6).map(d => [esc(d.label), fmtNum(d.budget), fmtNum(d.expenditure), fmtNum(d.remaining), fmtPct(d.utilization)]));
+  }
+  return `
+  <div class="kpi-grid" id="kpiGrid"></div>
+  ${summaryHtml}
+  <div class="charts-grid" id="chartsGrid"></div>
+  ${quickTables}
+  <p class="muted small">Charts aur KPIs Cleaned_Data se compute hui hain. Number format upar "Full / K / M / B" switch se badal sakte hain (sirf display — asal values wahi hain). Excel report ke "Dashboard" sheet me ye sab charts + management summary + conditional formatting shamil hai.</p>`;
+}
+
+/* ================= LOOKUP TOOL (VLOOKUP / XLOOKUP) ================= */
+let LOOKUP_LAST = null;
+
+function tabLookup(p) {
+  if (p.is_merged) {
+    return `<div class="empty">Lookup original workbook par available hai — ye dataset already merged/lookup se bana hai. Original file dobara upload karein.</div>`;
+  }
+  const myCols = (p.columns || []).map(c => c.name);
+  if (!myCols.length) return '<div class="empty">No columns available.</div>';
+  const sheets = p.sheets_info || [];
+  const opt = (v, l, sel) => `<option value="${esc(v)}"${sel === v ? " selected" : ""}>${esc(l)}</option>`;
+  const sheetOpts = sheets.map(s =>
+    opt(s.name, `${s.name} (${s.rows.toLocaleString()}×${s.cols})${s.name === p.sheet_name ? " — same sheet" : ""}`, LOOKUP_LAST ? LOOKUP_LAST.lookup_sheet : (sheets.find(x => x.name !== p.sheet_name) || sheets[0]).name)).join("");
+  return `
+  <p class="muted small">Excel ka VLOOKUP/XLOOKUP — <b>exact match, case-insensitive, first match wins</b> (bilkul VLOOKUP FALSE jaisa). Do kaam ek saath:
+  (1) <b>Preview + Apply</b> — naya column aap ke data me add kar ke poora analysis dobara chalega;
+  (2) <b>Ready-made Excel formulas</b> — aap ke workbook ke asli ranges se bani hui, jo aap khud Excel me paste kar sakein.</p>
+  <div class="builder">
+    <div class="builder-grid">
+      <div class="builder-field"><label>Aap ki key column</label>
+        <select id="lkMyKey">${myCols.map(c => opt(c, c, LOOKUP_LAST ? LOOKUP_LAST.from_key : (p.columns.find(x => x.role === "id") || p.columns[0]).name)).join("")}</select></div>
+      <div class="builder-field"><label>Lookup sheet</label>
+        <select id="lkSheet">${sheetOpts}</select></div>
+      <div class="builder-field"><label>Lookup key column</label>
+        <select id="lkKey"><option value="">— pehle sheet chunein —</option></select></div>
+      <div class="builder-field"><label>Return column (jo laani hai)</label>
+        <select id="lkRet"><option value="">— pehle sheet chunein —</option></select></div>
+      <button class="btn btn-primary" id="lkRun">🔍 Run Lookup (Preview)</button>
+    </div>
+  </div>
+  <div id="lkResult">${LOOKUP_LAST ? renderLookupResult(LOOKUP_LAST) : '<div class="empty">Columns chunein aur "Run Lookup" dabaein.</div>'}</div>`;
+}
+
+function wireLookup() {
+  const p = PAYLOAD;
+  const sheets = p.sheets_info || [];
+  const fillCols = () => {
+    const sname = $("lkSheet").value;
+    const s = sheets.find(x => x.name === sname);
+    const cols = s ? s.columns : [];
+    const keep = LOOKUP_LAST && LOOKUP_LAST.lookup_sheet === sname ? LOOKUP_LAST : null;
+    $("lkKey").innerHTML = cols.map(c => `<option value="${esc(c)}"${keep && keep.lookup_key === c ? " selected" : ""}>${esc(c)}</option>`).join("") || '<option value="">—</option>';
+    $("lkRet").innerHTML = cols.map(c => `<option value="${esc(c)}"${keep && keep.return_col === c ? " selected" : ""}>${esc(c)}</option>`).join("") || '<option value="">—</option>';
+  };
+  fillCols();
+  $("lkSheet").addEventListener("change", fillCols);
+  $("lkRun").addEventListener("click", async () => {
+    const btn = $("lkRun");
+    btn.disabled = true; btn.textContent = "Looking up…";
+    try {
+      const res = await fetch("/api/lookup", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_id: PAYLOAD.job_id, cur_sheet: PAYLOAD.sheet_name,
+          from_key: $("lkMyKey").value, lookup_sheet: $("lkSheet").value,
+          lookup_key: $("lkKey").value, return_col: $("lkRet").value,
+          apply: false,
+        })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Lookup failed.");
+      LOOKUP_LAST = { ...data, from_key: $("lkMyKey").value };
+      $("lkResult").innerHTML = renderLookupResult(LOOKUP_LAST);
+      wireApply();
+    } catch (err) {
+      $("lkResult").innerHTML = `<div class="alert alert-error">⚠ ${esc(err.message)}</div>`;
+    } finally {
+      btn.disabled = false; btn.textContent = "🔍 Run Lookup (Preview)";
+    }
+  });
+  wireApply();
+}
+
+function wireApply() {
+  const btn = $("lkApply");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    btn.disabled = true; btn.textContent = "Applying & re-analyzing…";
+    try {
+      const res = await fetch("/api/lookup", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_id: PAYLOAD.job_id, cur_sheet: PAYLOAD.sheet_name,
+          from_key: LOOKUP_LAST.from_key, lookup_sheet: LOOKUP_LAST.lookup_sheet,
+          lookup_key: LOOKUP_LAST.lookup_key, return_col: LOOKUP_LAST.return_col,
+          apply: true,
+          standardize_case: $("optStandardize").checked,
+          fill_missing: $("optFill").checked,
+          remove_duplicates: $("optDedup").checked,
+        })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Apply failed.");
+      PAYLOAD = data;
+      PIVOT_LAST = null; PIVOT_STATE.row = null; LOOKUP_LAST = null;
+      renderResults();
+      agentSay(`Lookup apply ho gaya — naya column "${esc(data.lookup_report.new_column)}" ab poore analysis, pivots aur dashboard mein shamil hai (${data.lookup_report.matched}/${data.lookup_report.total_rows} matched). Excel report mein "Merged_Data" sheet ye combined data rakhti hai.`);
+    } catch (err) {
+      alert("Apply failed: " + err.message);
+      btn.disabled = false; btn.textContent = "✅ Apply & Re-analyze";
+    }
+  });
+}
+
+function renderLookupResult(L) {
+  const s = L.stats, f = L.formulas || {};
+  const statsCards = `
+    <div class="kpi-grid" style="margin-bottom:14px">
+      <div class="kpi good"><div class="kpi-label">Matched</div><div class="kpi-value">${s.matched.toLocaleString()}</div><div class="kpi-sub">${s.match_pct}% of rows</div></div>
+      <div class="kpi ${s.not_found ? "warn" : "good"}"><div class="kpi-label">Not Found</div><div class="kpi-value">${s.not_found.toLocaleString()}</div><div class="kpi-sub">blank rahenge — kuch invent nahi hua</div></div>
+      <div class="kpi ${s.duplicate_lookup_keys ? "warn" : "good"}"><div class="kpi-label">Duplicate keys (lookup)</div><div class="kpi-value">${s.duplicate_lookup_keys.toLocaleString()}</div><div class="kpi-sub">${s.duplicate_lookup_keys ? "first match use hua (VLOOKUP behaviour)" : "lookup key unique hai"}</div></div>
+      <div class="kpi"><div class="kpi-label">Lookup rows</div><div class="kpi-value">${s.lookup_rows.toLocaleString()}</div><div class="kpi-sub">in "${esc(L.lookup_sheet)}"</div></div>
+    </div>`;
+  const preview = tableHTML(
+    [{ label: `${L.from_key} (aap ki key)` }, { label: `${L.formulas ? esc(L.formulas.return_col) : ""} → naya column` }],
+    (L.preview || []).map(r => [esc(r.key) || "—", esc(r.value) || '<span class="muted">Not Found</span>']));
+  const fx = f.xlookup ? `
+  <div class="section-h">🧮 Ready-made Excel formulas (aap ke workbook ke asli ranges se)</div>
+  <div class="muted-box" style="margin-bottom:8px">Naye column ke pehle cell (row 2) me daalein aur neeche drag karein. "$" absolute references is liye hain ke drag karne par ranges fix rahen.</div>
+  <table class="data"><tbody>
+    <tr><td style="width:130px"><b>XLOOKUP</b><br><span class="muted small">Excel 365 / 2021+</span></td><td><code>${esc(f.xlookup)}</code></td></tr>
+    <tr><td><b>VLOOKUP</b><br><span class="muted small">sab versions</span></td><td><code>${esc(f.vlookup)}</code></td></tr>
+    <tr><td><b>INDEX/MATCH</b><br><span class="muted small">purane Excel</span></td><td><code>${esc(f.index_match)}</code></td></tr>
+    <tr><td><b>IFERROR + VLOOKUP</b><br><span class="muted small">#N/A handle</span></td><td><code>${esc(f.iferror_vlookup)}</code></td></tr>
+  </tbody></table>
+  <div class="muted-box" style="margin-top:8px"><b>Samjhein:</b> <code>${esc(f.from_col)}</code> ki value ko lookup sheet ke <code>${esc(f.lookup_key)}</code> column me dhoondo (exact match), aur usi row ka <code>${esc(f.return_col)}</code> wapas lao. <code>FALSE</code> = exact match (approximate kabhi nahi). Not Found par XLOOKUP "Not Found" deta hai; VLOOKUP #N/A deta hai is liye IFERROR version use karein.</div>` : "";
+  return statsCards +
+    `<div class="section-h">👁 Preview (pehli 50 rows)</div>` + preview + fx +
+    `<div style="margin-top:16px"><button class="btn btn-primary btn-lg" id="lkApply">✅ Apply & Re-analyze — naya column "${esc(f.return_col || "")}" poore analysis me add karo</button></div>`;
 }
