@@ -205,6 +205,7 @@ def build_report(result, out_path):
         ('Data_Dictionary', 'Data model: every column with its detected role, type and notes.'),
         ('Rankings', 'Top 50 and Bottom 50 records by the main measure.'),
         ('Exception_Report', 'Duplicates, statistical anomalies, above-budget records.'),
+        ('Duplicates', 'Duplicate combinations (Name+Age+Department+Salary key) - matching rows yellow-highlighted in Raw_Data (formatting only, values untouched).'),
         ('Validation_Rules', 'Data-validation rules + dropdown value lists (applied in Cleaned_Data).'),
         ('Power_Query', 'Refreshable Power Query (M) script + manual Excel steps.'),
         ('Formulas', 'VLOOKUP / XLOOKUP / SUMIFS / RANK recipes built from your real ranges + live demo.'),
@@ -552,6 +553,70 @@ def build_report(result, out_path):
         r = _write_table(ws, abdf, r, number_cols={'Budget', 'Expenditure'})
     _autofit(ws)
 
+    # ---------------- Duplicates (Highlight & Summarize) ---------------- #
+    dupfeat = result.get('dup_feature') or {}
+    if dupfeat.get('ok'):
+        ws = wb.create_sheet('Duplicates')
+        r = _sheet_title(ws, 'DUPLICATES SUMMARY (HIGHLIGHT & SUMMARIZE)',
+                         'Key: Name + Age + Department + Salary (Trim ke baad exact match, 1 se zyada baar). '
+                         'Name akela duplicate nahi. Source rows Raw_Data me yellow highlight hain - values untouched.', span=6)
+        hdr_fill = PatternFill('solid', fgColor='0070C0')  # RGB(0,112,192)
+        headers = ['Name', 'Age', 'Department', 'Salary', 'Duplicate Count', 'Total Salary']
+        for j, h in enumerate(headers, 1):
+            c = ws.cell(row=r, column=j, value=h)
+            c.font = Font(bold=True, color='FFFFFF')
+            c.fill = hdr_fill
+        r += 1
+        data_start = r
+        for d in dupfeat['combos']:
+            ws.cell(row=r, column=1, value=d['name'])
+            ws.cell(row=r, column=2, value=d['age'])
+            ws.cell(row=r, column=3, value=d['department'])
+            ws.cell(row=r, column=4, value=d['salary'])
+            ws.cell(row=r, column=5, value=d['count'])
+            ws.cell(row=r, column=6, value=d['total_salary'] if d['total_salary'] is not None else 'n/a (salary numeric nahi)')
+            # number format SIRF Salary (D) aur Total Salary (F) — count (E) par nahi
+            ws.cell(row=r, column=4).number_format = '#,##0'
+            ws.cell(row=r, column=6).number_format = '#,##0'
+            r += 1
+        data_end = r - 1
+        n_summary = data_end - data_start + 1 if data_end >= data_start else 0
+        if not n_summary:
+            ws.cell(row=r, column=1, value='No duplicate records were found.').font = SUB_FONT
+            r += 1
+        for col in 'ABCDEF':
+            w = ws.column_dimensions[col].width or 0
+            ws.column_dimensions[col].width = max(w, 14)
+        _autofit(ws)
+        # ---- validation block (honest self-check) ----
+        r += 1
+        ws.cell(row=r, column=1, value='VALIDATION (auto-checks)').font = Font(bold=True, size=12, color=NAVY)
+        r += 1
+        vv = dupfeat.get('validation') or {}
+        checks = [
+            ('Duplicate source rows found', f"{dupfeat['dup_row_count']} (independent recount: {vv.get('recount_independent')})",
+             vv.get('recount_independent') == dupfeat.get('dup_row_count')),
+            ('Unique duplicate combinations', f"{dupfeat['unique_combos']}", True),
+            ('Rows created in Duplicates sheet', f"{n_summary}", True),
+            ('Total Salary = Salary x Duplicate Count (alag se verify)', 'PASS' if vv.get('total_salary_check') else 'MISMATCH',
+             bool(vv.get('total_salary_check'))),
+            ('Har highlighted row duplicate group ki hai', 'PASS' if vv.get('highlight_rows_all_in_groups') else 'FAIL',
+             bool(vv.get('highlight_rows_all_in_groups'))),
+            ('Koi non-duplicate row highlight nahi hui', 'PASS' if vv.get('no_nondup_highlighted') else 'FAIL',
+             bool(vv.get('no_nondup_highlighted'))),
+            ('Original source values unchanged', 'PASS' if vv.get('source_values_untouched') else 'FAIL',
+             bool(vv.get('source_values_untouched'))),
+        ]
+        for label, val, ok in checks:
+            ws.cell(row=r, column=1, value=('[PASS] ' if ok else '[FAIL] ') + label).font = Font(
+                color='1E7B34' if ok else 'C0392B', bold=not ok)
+            ws.cell(row=r, column=5, value=val).font = SUB_FONT
+            r += 1
+        if dupfeat.get('non_numeric_salary'):
+            ws.cell(row=r, column=1, value=f"NOTE: {dupfeat['non_numeric_salary']} duplicate row(s) ki Salary numeric nahi thi - "
+                                           "unke Total Salary 'n/a' hain (kuch invent nahi kiya gaya).").font = Font(color='B7791F')
+            r += 1
+
     # ---------------- Formulas (VLOOKUP / XLOOKUP recipes) ---------------- #
     ws = wb.create_sheet('Formulas')
     r = _sheet_title(ws, 'EXCEL FORMULA RECIPES',
@@ -754,6 +819,22 @@ def build_report(result, out_path):
     ws = wb.create_sheet('Raw_Data')
     _sheet_title(ws, 'RAW DATA (UNMODIFIED)', 'Exactly as uploaded - preserved for audit', span=10)
     _write_table(ws, raw, 3, date_cols=date_cols)
+    # Highlight & Summarize Duplicates: yellow fill on duplicate rows (A:J, formatting only)
+    dupfeat = result.get('dup_feature') or {}
+    raw_written = min(len(raw), 60000)
+    if dupfeat.get('ok') and dupfeat.get('dup_row_numbers'):
+        yellow = PatternFill('solid', fgColor='FFFF00')
+        hcols = min(10, max(len(raw.columns), 1))
+        for i in dupfeat['dup_row_numbers']:
+            if i > raw_written:
+                continue
+            rr_ = 3 + i
+            for cc_ in range(1, hcols + 1):
+                ws.cell(row=rr_, column=cc_).fill = yellow
+        ws.cell(row=3 + raw_written + 2, column=1,
+                value=(f"Yellow rows = duplicates (Name+Age+Department+Salary combination, "
+                       f"{dupfeat['dup_row_count']} rows in {dupfeat['unique_combos']} group(s)). "
+                       "Values me koi tabdeeli NAHI hui - sirf highlight. Poori summary 'Duplicates' sheet me hai.")).font = SUB_FONT
     ws.freeze_panes = 'A4'
     if len(raw.columns):
         ws.auto_filter.ref = f'A3:{get_column_letter(len(raw.columns))}{3 + len(raw)}'
@@ -833,7 +914,7 @@ def build_report(result, out_path):
 
     # sheet order
     order = ['Read_Me', 'Dashboard', 'Summary', 'Pivot_Analysis', 'Pivot_Charts', 'Data_Dictionary', 'Rankings',
-             'Exception_Report', 'Validation_Rules', 'Power_Query', 'Formulas', 'Data_Quality', 'Change_Log',
+             'Exception_Report', 'Duplicates', 'Validation_Rules', 'Power_Query', 'Formulas', 'Data_Quality', 'Change_Log',
              'Assumptions', 'Calculations', 'Merged_Data', 'Raw_Data', 'Cleaned_Data', 'Chart_Data']
     wb._sheets = [wb[n] for n in order if n in wb.sheetnames] + [s for s in wb._sheets if s.title not in order]
     wb.active = 0

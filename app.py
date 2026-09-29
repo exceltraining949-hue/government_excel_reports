@@ -11,7 +11,7 @@ import datetime as dt
 import pandas as pd
 from flask import Flask, request, jsonify, render_template, send_file, abort
 
-from analyzer import load_file, analyze, to_payload, build_pivot, detect_relationships, merge_sheets
+from analyzer import load_file, analyze, to_payload, build_pivot, detect_relationships, merge_sheets, analyze_duplicate_combos
 from report_builder import build_report
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -581,6 +581,89 @@ def api_lookup():
     except Exception as e:
         traceback.print_exc()
         return jsonify({'ok': False, 'error': f'Lookup failed: {type(e).__name__}.'}), 500
+
+
+# ------------------------------------------------------------------ #
+# HIGHLIGHT & SUMMARIZE DUPLICATES (VBA feature ka real execution)
+# ------------------------------------------------------------------ #
+def _verify_raw_untouched(report_path, raw_df):
+    """Report ki Raw_Data sheet ko asal raw values se cell-by-cell compare karo."""
+    try:
+        from openpyxl import load_workbook
+        wb = load_workbook(report_path, read_only=True, data_only=True)
+        try:
+            if 'Raw_Data' not in wb.sheetnames:
+                return False
+            ws = wb['Raw_Data']
+            written = min(len(raw_df), 60000)
+            rows = ws.iter_rows(min_row=4, max_row=3 + written, values_only=True)
+            for i, row in enumerate(rows):
+                src_row = raw_df.iloc[i]
+                for j, v in enumerate(row):
+                    if j >= len(raw_df.columns):
+                        break
+                    s = src_row.iloc[j]
+                    if s is None or (isinstance(s, float) and s != s):
+                        s = None
+                    if isinstance(s, bool):
+                        s = 'YES' if s else 'NO'  # _write_table bool ko YES/NO likhta hai
+                    if v is None and s is None:
+                        continue
+                    if isinstance(s, (int, float)) and isinstance(v, (int, float)):
+                        if abs(float(v) - float(s)) < 1e-9:
+                            continue
+                    if str(v) != str(s):
+                        return False
+            return True
+        finally:
+            wb.close()
+    except Exception:
+        return False
+
+
+@app.route('/api/duplicates', methods=['POST'])
+def api_duplicates():
+    """Name+Age+Department+Salary duplicate combos: real detection + report me
+    yellow highlighting + 'Duplicates' summary sheet. Uploaded file untouched."""
+    data = request.get_json(silent=True) or {}
+    job_id = str(data.get('job_id', ''))
+    if not job_id or not re_safe(job_id):
+        return jsonify({'ok': False, 'error': 'Invalid job id.'}), 400
+    try:
+        result = _get_result(job_id, data.get('sheet') or None)
+        dup = analyze_duplicate_combos(result.get('raw'))
+        if not dup.get('ok'):
+            return jsonify({'ok': False, 'error': dup['error']}), 400
+
+        # result me store + report rebuild (Raw_Data copy par highlight + Duplicates sheet)
+        result['dup_feature'] = dup
+        report_path = os.path.join(UPLOAD_DIR, job_id, 'Government_Analytics_Report.xlsx')
+        build_report(result, report_path)
+
+        # VALIDATION #7: Raw_Data ki values bilkul original jaisi hain? (asal check)
+        dup['validation']['source_values_untouched'] = _verify_raw_untouched(report_path, result['raw'])
+
+        payload_dup = {
+            'ok': True,
+            'columns_used': dup['columns_used'],
+            'total_rows': dup['total_rows'],
+            'dup_row_count': dup['dup_row_count'],
+            'unique_combos': dup['unique_combos'],
+            'dup_row_numbers': dup['dup_row_numbers'][:500],
+            'dup_row_numbers_truncated': len(dup['dup_row_numbers']) > 500,
+            'combos': dup['combos'][:500],
+            'combos_truncated': len(dup['combos']) > 500,
+            'non_numeric_salary': dup['non_numeric_salary'],
+            'validation': dup['validation'],
+            'message': dup['message'],
+            'sheet_name': result.get('sheet_name') or (data.get('sheet') or ''),
+        }
+        return jsonify(payload_dup)
+    except ValueError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'ok': False, 'error': f'Duplicate analysis failed: {type(e).__name__}.'}), 500
 
 
 @app.route('/download/<job_id>')

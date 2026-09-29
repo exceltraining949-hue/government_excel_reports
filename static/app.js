@@ -27,7 +27,7 @@ const I18N = {
     tabQuality: "Data Quality", tabSummary: "Summary & Pivots", tabRank: "Top / Bottom 50",
     tabExc: "Exceptions", tabChanges: "Change Log", tabAssume: "Assumptions", tabCols: "Columns",
     tabPivot: "Pivot Builder", tabModel: "Data Model", tabValid: "Validation", tabPQ: "Power Query",
-    tabDash: "Dashboard", tabLookup: "Lookup (V/X)", tabPivotCharts: "Pivot Charts",
+    tabDash: "Dashboard", tabLookup: "Lookup (V/X)", tabPivotCharts: "Pivot Charts", tabDuphl: "Highlight Duplicates",
     footer1: "🔐 Your file stays confidential — analysis happens only on this server, nothing is sent elsewhere.",
     footer2: "GovData Analytics Portal · Automated Excel analysis for government offices · No data is fabricated — every figure is computed from the uploaded file."
   },
@@ -55,7 +55,7 @@ const I18N = {
     tabQuality: "ڈیٹا کوالٹی", tabSummary: "خلاصہ و تجزیہ", tabRank: "ٹاپ / بٹم 50",
     tabExc: "استثنائات", tabChanges: "تبدیلی رپورٹ", tabAssume: "مفروضات", tabCols: "کالم",
     tabPivot: "پیوٹ بلڈر", tabModel: "ڈیٹا ماڈل", tabValid: "ویلیڈیشن", tabPQ: "پاور کوری",
-    tabDash: "ڈیش بورڈ", tabLookup: "لک اپ", tabPivotCharts: "پیوٹ چارٹس",
+    tabDash: "ڈیش بورڈ", tabLookup: "لک اپ", tabPivotCharts: "پیوٹ چارٹس", tabDuphl: "ڈپلیکیٹ ہائی لائٹ",
     footer1: "🔐 آپ کی فائل رازدارانہ ہے — تجزیہ صرف اسی سرور پر ہوتا ہے۔",
     footer2: "گوو ڈیٹا اینالیٹکس پورٹل · حکومتی دفاتر کے لیے خودکار ایکسل تجزیہ · کوئی ڈیٹا گھڑا نہیں جاتا۔"
   }
@@ -419,6 +419,7 @@ function renderTab(tab) {
   else if (tab === "columns") body.innerHTML = tabColumns(p);
   else if (tab === "pivot") { body.innerHTML = tabPivotBuilder(p); wirePivotBuilder(); }
   else if (tab === "pivotcharts") { body.innerHTML = tabPivotCharts(p); wirePivotCharts(); }
+  else if (tab === "duphl") { body.innerHTML = tabDuphl(p); wireDuphl(); }
   else if (tab === "dashboard") { body.innerHTML = tabDashboard(p); renderKpis(); renderCharts(); }
   else if (tab === "lookup") { body.innerHTML = tabLookup(p); wireLookup(); }
   else if (tab === "model") { body.innerHTML = tabModel(p); wireModel(); }
@@ -1223,6 +1224,12 @@ function runCommand() {
   if (dimHit) { activateTab("summary"); agentSay(`Department-wise summary khol di (${esc(dimHit.dimension)}). Puri detail "Summary & Pivots" tab aur Excel report me hai.`); return; }
   const distHit = p.pivots.find(pv => /(district|zilla|tehsil|city|region|division|area|location)/.test(raw) && pv.dimension.toLowerCase().match(/district|tehsil|zilla|city|region|division|area|location|province/));
   if (distHit) { activateTab("summary"); agentSay(`District/region-wise summary khol di (${esc(distHit.dimension)}).`); return; }
+  // highlight duplicates (VBA feature — Name+Age+Department+Salary combo)
+  if (/(highlight|yellow|zard|rama|rang|colour|color|summar)/.test(raw) && /(duplicate|duplicat|mukarrar|repeat|combo)/.test(raw)) {
+    activateTab("duphl");
+    agentSay("Highlight Duplicates tool khol diya — Name + Age + Department + Salary ka combination jo 1 se zyada baar aaye (Trim ke baad exact match, Name akela nahi). Button dabate hi real detection chalega aur Excel report me yellow highlight + 'Duplicates' summary sheet banegi. VBA module bhi yahan se download ho jata hai.");
+    return;
+  }
   // duplicates
   if (/(duplicate|duplicat|do bar|dobara|repeat|mukarrar)/.test(raw)) {
     activateTab("exceptions");
@@ -1319,6 +1326,90 @@ function runCommand() {
     return;
   }
   agentSay('Ye command samajh nahi aayi. Yehi try karein: <b>"top 10"</b>, <b>"department wise summary"</b>, <b>"pivot banao"</b>, <b>"pivot chart banao"</b>, <b>"vlookup laga do"</b>, <b>"dashboard"</b>, <b>"data model"</b>, <b>"power query"</b>, <b>"validation rules"</b>, <b>"duplicates dikhao"</b>, <b>"missing values"</b>, <b>"outliers"</b>, <b>"monthly trend"</b>, <b>"million me dikhao"</b>, <b>"budget vs expenditure"</b>, <b>"summary"</b>.');
+}
+
+/* ================= HIGHLIGHT DUPLICATES TAB (VBA feature) ================= */
+let DUPHL_LAST = null;
+
+function tabDuphl(p) {
+  return `
+  <p class="muted small">Excel VBA macro <b>"Highlight &amp; Summarize Duplicates"</b> ka live version — bilkul wahi logic:
+  <b>Name + Age + Department + Salary</b> ka combination agar <b>1 se zyada baar</b> aaye to duplicate hai (Trim ke baad exact match — <b>Name akela kaafi nahi</b>).
+  Original uploaded file me kuch nahi badalta — yellow highlighting + "Duplicates" summary sheet aap ki <b>Excel report</b> me aate hain (Raw_Data ki copy par, values bilkul untouched).</p>
+  <div class="builder">
+    <div class="builder-grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
+      <button class="btn btn-primary btn-lg" id="dupRun">🔁 Find &amp; Highlight Duplicates</button>
+      <a class="btn" href="/static/HighlightAndSummarizeDuplicates.bas" download style="text-align:center">📥 VBA module (.bas) download</a>
+    </div>
+  </div>
+  <div class="muted-box" style="margin:10px 0">Zaroori columns: <b>Name, Age, Department, Salary</b> (headers isi naam se; VBA version me B/C/D/E). Total Salary = Salary × Duplicate Count. Kuch bhi invent nahi hota — har adad uploaded file se aata hai.</div>
+  <div id="dupResult">${DUPHL_LAST && DUPHL_LAST.job_id === p.job_id && DUPHL_LAST.sheet_name === p.sheet_name ? renderDuphl(DUPHL_LAST) : '<div class="empty">Button dabaein — combinations count honge, report me yellow highlight + "Duplicates" sheet banegi, aur validation checks chaleinge.</div>'}</div>`;
+}
+
+function wireDuphl() {
+  const btn = $("dupRun");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    btn.disabled = true; btn.textContent = "Analyzing duplicates…";
+    try {
+      const res = await fetch("/api/duplicates", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: PAYLOAD.job_id, sheet: PAYLOAD.sheet_name })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Duplicate analysis failed.");
+      DUPHL_LAST = { ...data, job_id: PAYLOAD.job_id };
+      $("dupResult").innerHTML = renderDuphl(DUPHL_LAST);
+      agentSay(esc(data.message) + ' Report download kar ke "Duplicates" sheet kholein (Raw_Data me yellow rows bhi hain).');
+    } catch (err) {
+      $("dupResult").innerHTML = `<div class="alert alert-error">⚠ ${esc(err.message)}</div>`;
+    } finally {
+      btn.disabled = false; btn.textContent = "🔁 Find & Highlight Duplicates";
+    }
+  });
+}
+
+function renderDuphl(d) {
+  const v = d.validation || {};
+  const banner = d.dup_row_count
+    ? `<div class="alert alert-ok">✅ <b>${esc(d.message)}</b></div>`
+    : `<div class="alert alert-ok">✅ ${esc(d.message)}</div>`;
+  const cards = `
+    <div class="kpi-grid" style="margin:12px 0">
+      <div class="kpi ${d.dup_row_count ? "warn" : "good"}"><div class="kpi-label">Duplicate rows</div><div class="kpi-value">${d.dup_row_count.toLocaleString()}</div><div class="kpi-sub">of ${d.total_rows.toLocaleString()} rows</div></div>
+      <div class="kpi"><div class="kpi-label">Unique duplicate combos</div><div class="kpi-value">${d.unique_combos.toLocaleString()}</div><div class="kpi-sub">Name+Age+Dept+Salary</div></div>
+      <div class="kpi"><div class="kpi-label">Duplicates sheet rows</div><div class="kpi-value">${d.unique_combos.toLocaleString()}</div><div class="kpi-sub">report mein</div></div>
+      <div class="kpi ${v.total_salary_check ? "good" : "bad"}"><div class="kpi-label">Total Salary check</div><div class="kpi-value">${v.total_salary_check ? "PASS" : "MISMATCH"}</div><div class="kpi-sub">Salary × Count verified</div></div>
+    </div>`;
+  const checks = [
+    ["Duplicate source rows found", `${d.dup_row_count.toLocaleString()} (independent recount: ${v.recount_independent != null ? v.recount_independent.toLocaleString() : "—"})`, v.recount_independent === d.dup_row_count],
+    ["Unique duplicate combinations", `${d.unique_combos.toLocaleString()}`, true],
+    ["Rows created in Duplicates sheet", `${d.unique_combos.toLocaleString()}`, true],
+    ["Total Salary = Salary × Duplicate Count", v.total_salary_check ? "PASS" : "MISMATCH", !!v.total_salary_check],
+    ["Har highlighted row duplicate group ki hai", v.highlight_rows_all_in_groups ? "PASS" : "FAIL", !!v.highlight_rows_all_in_groups],
+    ["Koi non-duplicate row highlight nahi hui", v.no_nondup_highlighted ? "PASS" : "FAIL", !!v.no_nondup_highlighted],
+    ["Original source values unchanged (asal report se verify)", v.source_values_untouched ? "PASS" : "FAIL", !!v.source_values_untouched],
+  ];
+  const valTable = `<div class="section-h">✅ Validation checks</div>` + tableHTML(
+    [{ label: "Check" }, { label: "Result" }, { label: "Status" }],
+    checks.map(c => [c[0], esc(String(c[1])), c[2] ? '<span style="color:#1E7B34;font-weight:700">PASS</span>' : '<span style="color:#C0392B;font-weight:700">FAIL</span>']));
+  let comboTable = "";
+  if (d.combos && d.combos.length) {
+    comboTable = `<div class="section-h">🔁 Duplicate combinations (top ${Math.min(d.combos.length, 100)}${d.combos_truncated ? " — poori list Excel report mein" : ""})</div>` +
+      tableHTML(
+        [{ label: "Name" }, { label: "Age", num: true }, { label: "Department" }, { label: "Salary", num: true },
+         { label: "Duplicate Count", num: true }, { label: "Total Salary", num: true }],
+        d.combos.slice(0, 100).map(c => [
+          esc(String(c.name ?? "—")), esc(String(c.age ?? "—")), esc(String(c.department ?? "—")),
+          typeof c.salary === "number" ? fmtNum(c.salary) : esc(String(c.salary ?? "—")),
+          c.count, c.total_salary == null ? "n/a" : fmtNum(c.total_salary)]));
+  }
+  const nn = d.non_numeric_salary
+    ? `<div class="alert alert-warn">⚠ ${d.non_numeric_salary} duplicate row(s) ki Salary numeric nahi thi — unka Total Salary "n/a" hai (kuch invent nahi kiya gaya).</div>` : "";
+  const firstRows = (d.dup_row_numbers || []).slice(0, 15).join(", ");
+  const rowsNote = d.dup_row_count
+    ? `<p class="muted small">Highlighted data rows (1-based, Raw_Data sheet mein row 3+i): ${firstRows}${d.dup_row_numbers_truncated ? " …" : ""}. Yellow highlight sirf formatting hai — values wahi hain. Note: macro sirf rows highlight karta hai, delete kuch NAHI hota (audit rule).</p>` : "";
+  return banner + cards + valTable + nn + comboTable + rowsNote;
 }
 
 /* ================= DASHBOARD TAB ================= */

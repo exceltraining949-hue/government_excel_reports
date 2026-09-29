@@ -1539,3 +1539,187 @@ def build_formula_recipes(raw, col_meta, ctx, main_metric, dim_cols, id_dup_info
             'purpose': f'{main_metric} ki ranking (highest = 1)',
             'explain': '0 (ya blank) = descending (sab se bara #1); 1 = ascending. Ties par same rank milta hai (competition ranking).'})
     return recipes
+
+
+# ------------------------------------------------------------------ #
+# HIGHLIGHT & SUMMARIZE DUPLICATES (VBA feature ka Python port)
+# Key: Name + Age + Department + Salary — Trim ke baad EXACT match,
+# 1 se zyada baar = duplicate. Name akela kaafi nahi. Raw values use
+# hote hain (cleaning se pehle), taake VBA ke ActiveSheet jaisa rahe.
+# ------------------------------------------------------------------ #
+DUP_COMBO_REQUIRED = [('name', 'Name'), ('age', 'Age'),
+                      ('department', 'Department'), ('salary', 'Salary')]
+
+
+def _vba_cstr(v):
+    """VBA ka Trim(CStr(value)) behaviour — duplicate key ke liye exact port.
+
+    - None/NaN -> ""          (VBA: Empty -> "")
+    - 30.0 -> "30"            (VBA CStr(30#) -> "30")
+    - strings par sirf spaces trim hoti hain (VBA Trim sirf 0x20 katta hai)
+    """
+    if v is None:
+        return ''
+    if isinstance(v, float):
+        if v != v:  # NaN
+            return ''
+        return str(int(v)) if v.is_integer() else ('%g' % v)
+    if isinstance(v, bool):
+        return 'True' if v else 'False'
+    if isinstance(v, (int, np.integer)):
+        return str(int(v))
+    if isinstance(v, (float, np.floating)):
+        f = float(v)
+        return str(int(f)) if f.is_integer() else ('%g' % f)
+    if isinstance(v, str):
+        return v.strip(' ')
+    if 'Timestamp' in type(v).__name__ or isinstance(v, (np.datetime64,)):
+        return str(v)
+    return str(v).strip(' ')
+
+
+def _dup_salary_num(v):
+    """Salary ko number me parse karo (VBA IsNumeric/CDbl jaisa). None = numeric nahi."""
+    if isinstance(v, (bool, np.bool_)):
+        return None
+    if isinstance(v, (int, float, np.integer, np.floating)):
+        f = float(v)
+        return None if f != f else f
+    if isinstance(v, str) and v.strip():
+        try:
+            return float(v.replace(',', ''))
+        except ValueError:
+            return None
+    return None
+
+
+def _dup_val(v):
+    """Cell value ko display/JSON-safe banao (types preserve, NaN->None)."""
+    if v is None:
+        return None
+    if isinstance(v, float):
+        if v != v:
+            return None
+        return int(v) if v.is_integer() else v
+    if isinstance(v, (bool, np.bool_)):
+        return 'YES' if v else 'NO'
+    if isinstance(v, (int, np.integer)):
+        return int(v)
+    if isinstance(v, (np.floating,)):
+        f = float(v)
+        return int(f) if f.is_integer() else f
+    if isinstance(v, str):
+        return v
+    return str(v)
+
+
+def analyze_duplicate_combos(raw):
+    """Duplicate combinations detect karo (VBA HighlightAndSummarizeDuplicates wahi logic).
+
+    Returns dict: ok, columns_used, combos[] (name/age/department/salary/count/
+    total_salary/row_numbers), dup_row_numbers (1-based data rows), validation{},
+    message. Total Salary = Salary x Duplicate Count (spec rule).
+    """
+    out = {'feature': 'highlight_duplicates',
+           'key': ['Name', 'Age', 'Department', 'Salary'],
+           'match': 'exact after Trim (VBA Trim/CStr jaisa) — case-sensitive, Name akela nahi'}
+    if raw is None or not len(list(raw.columns)):
+        out.update(ok=False, error='Is sheet me koi columns nahi mile.')
+        return out
+
+    # required headers (trimmed, case-insensitive) — VBA version B/C/D/E positions use karta hai
+    hdr = {}
+    for c in raw.columns:
+        h = str(c).strip().lower()
+        if h and h not in hdr:
+            hdr[h] = c
+    cols, missing = {}, []
+    for k, label in DUP_COMBO_REQUIRED:
+        if k in hdr:
+            cols[k] = hdr[k]
+        else:
+            missing.append(label)
+    if missing:
+        out.update(ok=False,
+                   error=('Required columns missing: ' + ', '.join(missing) +
+                          '. Ye feature headers "Name", "Age", "Department" aur "Salary" maangta hai '
+                          '(VBA version me Column B=Name, C=Age, D=Department, E=Salary).'),
+                   missing=missing)
+        return out
+
+    name_s = raw[cols['name']].tolist()
+    age_s = raw[cols['age']].tolist()
+    dep_s = raw[cols['department']].tolist()
+    sal_s = raw[cols['salary']].tolist()
+
+    # ---- FIRST PASS: har combination kitni baar aaya (VBA dict count) ----
+    keys = ['|'.join((_vba_cstr(a), _vba_cstr(b), _vba_cstr(c), _vba_cstr(d)))
+            for a, b, c, d in zip(name_s, age_s, dep_s, sal_s)]
+    counts = {}
+    for k in keys:
+        counts[k] = counts.get(k, 0) + 1
+    dup_keys = {k for k, n in counts.items() if n > 1}
+
+    # ---- SECOND PASS: groups banao (first-occurrence order, VBA jaisa) ----
+    combos, seen = [], {}
+    dup_rows = []
+    non_numeric = 0
+    for i, k in enumerate(keys, 1):
+        if k not in dup_keys:
+            continue
+        dup_rows.append(i)
+        if k not in seen:
+            seen[k] = len(combos)
+            sal_raw = sal_s[i - 1]
+            sal_num = _dup_salary_num(sal_raw)
+            if sal_num is None:
+                non_numeric += counts[k]
+            combos.append({'name': _dup_val(name_s[i - 1]), 'age': _dup_val(age_s[i - 1]),
+                           'department': _dup_val(dep_s[i - 1]), 'salary': _dup_val(sal_raw),
+                           'salary_num': sal_num, 'count': counts[k], 'row_numbers': [i]})
+        else:
+            combos[seen[k]]['row_numbers'].append(i)
+
+    # Total Salary = Salary x Duplicate Count (spec rule — unrelated salaries add NAHI hote)
+    for c in combos:
+        c['total_salary'] = c['salary_num'] * c['count'] if c['salary_num'] is not None else None
+        c.pop('salary_num', None)
+
+    # sab se zyada repeat pehle (display ke liye)
+    combos.sort(key=lambda c: (-c['count'], str(c['name'])))
+
+    # ---- VALIDATION (independent recount — fabricated numbers kabhi nahi) ----
+    v = {
+        'dup_rows_found': len(dup_rows),
+        'unique_combos': len(combos),
+        'summary_rows': len(combos),
+        'total_salary_check': True,
+        'highlight_rows_all_in_groups': all(counts[keys[i - 1]] > 1 for i in dup_rows),
+    }
+    v['recount_independent'] = sum(1 for k in keys if counts[k] > 1)
+    for c in combos:  # Total Salary ko dobara, alag tareeqe se check karo
+        if c['total_salary'] is None:
+            continue
+        ssum = 0.0
+        for i in c['row_numbers']:
+            sv = _dup_salary_num(sal_s[i - 1])
+            if sv is not None:
+                ssum += sv
+        if abs(ssum - c['total_salary']) > 0.005:
+            v['total_salary_check'] = False
+    v['no_nondup_highlighted'] = (v['highlight_rows_all_in_groups']
+                                  and v['recount_independent'] == len(dup_rows))
+    v['source_values_untouched'] = True  # report likhne ke BAAD app.py asal values se verify karta hai
+
+    if dup_rows:
+        message = (f'Duplicate analysis completed. {len(dup_rows)} duplicate rows found. '
+                   f'{len(combos)} unique duplicate entries created. '
+                   "A summary has been created in the 'Duplicates' sheet.")
+    else:
+        message = 'No duplicate records were found.'
+
+    out.update(ok=True, columns_used={k: str(c) for k, c in cols.items()},
+               total_rows=len(raw), dup_row_count=len(dup_rows), unique_combos=len(combos),
+               dup_row_numbers=dup_rows, combos=combos, non_numeric_salary=non_numeric,
+               validation=v, message=message)
+    return out
