@@ -27,7 +27,7 @@ const I18N = {
     tabQuality: "Data Quality", tabSummary: "Summary & Pivots", tabRank: "Top / Bottom 50",
     tabExc: "Exceptions", tabChanges: "Change Log", tabAssume: "Assumptions", tabCols: "Columns",
     tabPivot: "Pivot Builder", tabModel: "Data Model", tabValid: "Validation", tabPQ: "Power Query",
-    tabDash: "Dashboard", tabLookup: "Lookup (V/X)",
+    tabDash: "Dashboard", tabLookup: "Lookup (V/X)", tabPivotCharts: "Pivot Charts",
     footer1: "🔐 Your file stays confidential — analysis happens only on this server, nothing is sent elsewhere.",
     footer2: "GovData Analytics Portal · Automated Excel analysis for government offices · No data is fabricated — every figure is computed from the uploaded file."
   },
@@ -55,7 +55,7 @@ const I18N = {
     tabQuality: "ڈیٹا کوالٹی", tabSummary: "خلاصہ و تجزیہ", tabRank: "ٹاپ / بٹم 50",
     tabExc: "استثنائات", tabChanges: "تبدیلی رپورٹ", tabAssume: "مفروضات", tabCols: "کالم",
     tabPivot: "پیوٹ بلڈر", tabModel: "ڈیٹا ماڈل", tabValid: "ویلیڈیشن", tabPQ: "پاور کوری",
-    tabDash: "ڈیش بورڈ", tabLookup: "لک اپ",
+    tabDash: "ڈیش بورڈ", tabLookup: "لک اپ", tabPivotCharts: "پیوٹ چارٹس",
     footer1: "🔐 آپ کی فائل رازدارانہ ہے — تجزیہ صرف اسی سرور پر ہوتا ہے۔",
     footer2: "گوو ڈیٹا اینالیٹکس پورٹل · حکومتی دفاتر کے لیے خودکار ایکسل تجزیہ · کوئی ڈیٹا گھڑا نہیں جاتا۔"
   }
@@ -418,6 +418,7 @@ function renderTab(tab) {
   else if (tab === "assume") body.innerHTML = tabAssume(p);
   else if (tab === "columns") body.innerHTML = tabColumns(p);
   else if (tab === "pivot") { body.innerHTML = tabPivotBuilder(p); wirePivotBuilder(); }
+  else if (tab === "pivotcharts") { body.innerHTML = tabPivotCharts(p); wirePivotCharts(); }
   else if (tab === "dashboard") { body.innerHTML = tabDashboard(p); renderKpis(); renderCharts(); }
   else if (tab === "lookup") { body.innerHTML = tabLookup(p); wireLookup(); }
   else if (tab === "model") { body.innerHTML = tabModel(p); wireModel(); }
@@ -554,16 +555,12 @@ function tabColumns(p) {
 /* ================= PIVOT BUILDER ================= */
 let PIVOT_STATE = { row: null, col: "", measure: "__count__", agg: "sum", filter_col: "", filter_val: "" };
 
-function tabPivotBuilder(p) {
+function pivotGridHtml(p, btnLabel) {
   const cats = p.categorical_columns || [];
   const nums = p.numeric_columns || [];
-  if (!cats.length) return '<div class="empty">Pivot not possible — no categorical column detected in this data.</div>';
   PIVOT_STATE.row = PIVOT_STATE.row && cats.some(c => c.name === PIVOT_STATE.row) ? PIVOT_STATE.row : cats[0].name;
   const opt = (v, l, sel) => `<option value="${esc(v)}"${sel === v ? " selected" : ""}>${esc(l)}</option>`;
   return `
-  <p class="muted small">PivotTable jaisa builder — Rows, Columns, Values, Aggregation aur Filter sab aap ke data ke asli columns se. Excel ke PivotTable options ke mutabiq.</p>
-  <div class="builder">
-    <div class="builder-grid">
       <div class="builder-field"><label>Rows</label>
         <select id="pvRow">${cats.map(c => opt(c.name, c.name, PIVOT_STATE.row)).join("")}</select></div>
       <div class="builder-field"><label>Columns (optional)</label>
@@ -576,8 +573,16 @@ function tabPivotBuilder(p) {
         <select id="pvFCol"><option value="">— none —</option>${cats.map(c => opt(c.name, c.name, PIVOT_STATE.filter_col)).join("")}</select></div>
       <div class="builder-field"><label>Filter value</label>
         <select id="pvFVal"><option value="">— all —</option></select></div>
-      <button class="btn btn-primary" id="pvBuild">📊 Build Pivot</button>
-    </div>
+      <button class="btn btn-primary" id="pvBuild">${btnLabel}</button>`;
+}
+
+function tabPivotBuilder(p) {
+  const cats = p.categorical_columns || [];
+  if (!cats.length) return '<div class="empty">Pivot not possible — no categorical column detected in this data.</div>';
+  return `
+  <p class="muted small">PivotTable jaisa builder — Rows, Columns, Values, Aggregation aur Filter sab aap ke data ke asli columns se. Excel ke PivotTable options ke mutabiq. Isi pivot ka <b>chart</b> chahiye to result me "chart dekhein" button ya <b>Pivot Charts</b> tab use karein.</p>
+  <div class="builder">
+    <div class="builder-grid">${pivotGridHtml(p, "📊 Build Pivot")}</div>
   </div>
   <div id="pvResult">${PIVOT_LAST ? renderPivotResult(PIVOT_LAST) : '<div class="empty">Fields chunein aur "Build Pivot" dabaein.</div>'}</div>`;
 }
@@ -585,8 +590,19 @@ function tabPivotBuilder(p) {
 let PIVOT_LAST = null;
 
 function wirePivotBuilder() {
-  const p = PAYLOAD;
-  const cats = p.categorical_columns || [];
+  wirePivotCore(() => { $("pvResult").innerHTML = renderPivotResult(PIVOT_LAST); wirePvToChart(); }, "pvResult");
+  wirePvToChart();
+}
+
+function wirePvToChart() {
+  const b = $("pvToChart");
+  if (b) b.addEventListener("click", () => activateTab("pivotcharts"));
+}
+
+/* shared wiring — Pivot Builder aur Pivot Charts tabs same field ids use karte hain (ek waqt me sirf ek tab render hota hai) */
+function wirePivotCore(renderResult, errId) {
+  const cats = PAYLOAD.categorical_columns || [];
+  const btnLabel = $("pvBuild").textContent;
   const fillVals = () => {
     const fc = $("pvFCol").value;
     const fv = $("pvFVal");
@@ -616,16 +632,17 @@ function wirePivotBuilder() {
       if (!data.ok) throw new Error(data.error || "Pivot failed.");
       PIVOT_LAST = data.pivot;
       PIVOT_STATE = { row: $("pvRow").value, col: $("pvCol").value, measure: $("pvVal").value, agg: $("pvAgg").value, filter_col: $("pvFCol").value, filter_val: $("pvFVal").value };
-      $("pvResult").innerHTML = renderPivotResult(PIVOT_LAST);
+      renderResult();
     } catch (err) {
-      $("pvResult").innerHTML = `<div class="alert alert-error">⚠ ${esc(err.message)}</div>`;
+      const tgt = $(errId);
+      if (tgt) tgt.innerHTML = `<div class="alert alert-error">⚠ ${esc(err.message)}</div>`;
     } finally {
-      btn.disabled = false; btn.textContent = "📊 Build Pivot";
+      btn.disabled = false; btn.textContent = btnLabel;
     }
   });
 }
 
-function renderPivotResult(pv) {
+function renderPivotResult(pv, opts) {
   const mLabel = pv.measure ? `${pv.agg === "count" ? "Count" : pv.agg} of ${esc(pv.measure)}` : "Record count";
   const fNote = pv.filter ? ` · filter: ${esc(pv.filter.column)} = ${esc(pv.filter.value)}` : "";
   let html = `<div class="section-h">📊 ${esc(pv.row_dim)}${pv.col_dim ? " × " + esc(pv.col_dim) : ""} — ${mLabel}${fNote} <span class="muted small">(${pv.records.toLocaleString()} records)</span></div>`;
@@ -647,8 +664,311 @@ function renderPivotResult(pv) {
       .concat(pv.grand_total != null ? [`<b>${fmtNum(pv.grand_total)}</b>`] : ["—"]);
     html += tableHTML(headers, rows.concat([trow]));
   }
+  if (!opts || opts.withChartBtn !== false) html += `<div style="margin-top:12px"><button class="btn" id="pvToChart">📈 Isi pivot ka chart dekhein — Pivot Charts tab</button></div>`;
   html += `<p class="muted small">Note: ye calculation hai — values uploaded file se compute hui hain, kuch invent nahi hua. Top 30 rows / 15 columns tak display.</p>`;
   return html;
+}
+
+/* ================= PIVOT CHARTS TAB (PivotChart jaisa) ================= */
+let PIVOT_CHART_TYPE = "bar";
+
+function pcMeasureLabel(pv) {
+  return pv.measure ? `${pv.agg === "count" ? "Count" : pv.agg} of ${pv.measure}` : "Record count";
+}
+function pcAxisFmt(v) {
+  const r = Math.abs(v) >= 100 ? Math.round(v) : Math.round(v * 100) / 100;
+  return fmtNum(r);
+}
+function pcAvailableTypes(pv) {
+  return pv.mode === "cross"
+    ? [["grouped", "📊 Grouped Bars"], ["stacked", "📚 Stacked"], ["stacked100", "🧱 100% Stacked"], ["heatmap", "🔥 Heatmap"]]
+    : [["bar", "📈 Bar"], ["column", "📊 Column"], ["donut", "🍩 Donut"], ["line", "📉 Line"]];
+}
+function pcTypesHtml(pv) {
+  const avail = pcAvailableTypes(pv);
+  if (!avail.some(t => t[0] === PIVOT_CHART_TYPE)) PIVOT_CHART_TYPE = avail[0][0];
+  return `<div class="fmt-bar" style="margin:14px 0">
+    <span class="muted">Chart type:</span>
+    ${avail.map(t => `<button class="fmt-btn${t[0] === PIVOT_CHART_TYPE ? " active" : ""}" data-ctype="${t[0]}">${t[1]}</button>`).join("")}
+  </div>`;
+}
+
+function tabPivotCharts(p) {
+  const cats = p.categorical_columns || [];
+  if (!cats.length) return '<div class="empty">Pivot charts not possible — no categorical column detected in this data.</div>';
+  return `
+  <p class="muted small">PivotChart — Excel ke PivotChart jaisa: jo pivot aap banate hain wo chart ki shakal me dekhein. Fields chunein, "Build Chart" dabaein, phir upar se chart type badlein. Har chart ke neeche uska exact data table bhi hai — values uploaded file se compute hoti hain, kuch invent nahi hota.</p>
+  <div class="builder">
+    <div class="builder-grid">${pivotGridHtml(p, "📈 Build Chart")}</div>
+  </div>
+  ${PIVOT_LAST ? pcTypesHtml(PIVOT_LAST) : ""}
+  <div id="pcCharts">${PIVOT_LAST ? pcChartsHtml(PIVOT_LAST) : '<div class="empty">Fields chunein aur "Build Chart" dabaein — chart yahan banega. Pivot Builder me pivot bana hua hai to wo yahan turant chart ban jayega.</div>'}</div>`;
+}
+
+function wirePivotCharts() {
+  wirePivotCore(() => {
+    const t = $("pcTypes");
+    if (t) t.innerHTML = pcTypesHtml(PIVOT_LAST);
+    wirePcTypes();
+    $("pcCharts").innerHTML = pcChartsHtml(PIVOT_LAST);
+  }, "pcCharts");
+  wirePcTypes();
+}
+
+function wirePcTypes() {
+  document.querySelectorAll("[data-ctype]").forEach(b => b.addEventListener("click", () => {
+    PIVOT_CHART_TYPE = b.dataset.ctype;
+    document.querySelectorAll("[data-ctype]").forEach(x => x.classList.toggle("active", x === b));
+    $("pcCharts").innerHTML = pcChartsHtml(PIVOT_LAST);
+  }));
+}
+
+function pcChartsHtml(pv) {
+  const mLabel = pcMeasureLabel(pv);
+  const fNote = pv.filter ? ` · filter: ${esc(pv.filter.column)} = ${esc(pv.filter.value)}` : "";
+  const nCats = pv.mode === "cross" ? pv.row_labels.length : pv.rows.length;
+  let cards = `<div class="kpi"><div class="kpi-label">Records</div><div class="kpi-value">${pv.records.toLocaleString()}</div><div class="kpi-sub">${nCats} categories</div></div>`;
+  if (pv.grand_total != null) cards += `<div class="kpi"><div class="kpi-label">Grand total</div><div class="kpi-value">${fmtNum(pv.grand_total)}</div><div class="kpi-sub">${esc(mLabel)}</div></div>`;
+  const topLabel = pv.mode === "single" ? (pv.rows[0] && pv.rows[0].label) : pv.row_labels[0];
+  const topValue = pv.mode === "single" ? (pv.rows[0] ? pv.rows[0].value : null) : (pv.row_totals ? pv.row_totals[0] : null);
+  if (topLabel != null) cards += `<div class="kpi good"><div class="kpi-label">Top: ${esc(String(topLabel))}</div><div class="kpi-value">${topValue == null ? "—" : fmtNum(topValue)}</div><div class="kpi-sub">sab se bara</div></div>`;
+  let chart;
+  switch (PIVOT_CHART_TYPE) {
+    case "column": chart = pcColumnChart(pv); break;
+    case "donut": chart = pcDonutChart(pv); break;
+    case "line": chart = pcLineChart(pv); break;
+    case "grouped": chart = pcGroupedChart(pv); break;
+    case "stacked": chart = pcStackedChart(pv, false); break;
+    case "stacked100": chart = pcStackedChart(pv, true); break;
+    case "heatmap": chart = pcHeatmap(pv); break;
+    default: chart = pcBarChart(pv);
+  }
+  return `<div class="section-h">📈 ${esc(pv.row_dim)}${pv.col_dim ? " × " + esc(pv.col_dim) : ""} — ${esc(mLabel)}${fNote} <span class="muted small">(${pv.records.toLocaleString()} records)</span></div>
+    <div class="kpi-grid" style="margin-bottom:14px">${cards}</div>
+    <div class="charts-grid">${chart}</div>
+    <div class="section-h">📋 Chart ke peeche ka data (exact values)</div>
+    ${renderPivotResult(pv, { withChartBtn: false })}`;
+}
+
+/* ---- 1. horizontal bar (CSS) ---- */
+function pcBarChart(pv) {
+  const rows = pv.rows.slice(0, 15);
+  if (!rows.length) return '<div class="chart-card"><div class="empty">Koi category nahi mili.</div></div>';
+  const max = Math.max(...rows.map(r => Number(r.value) || 0), 1e-9);
+  const bars = rows.map((r, i) => {
+    const v = Number(r.value) || 0;
+    return `<div class="bar-row">
+      <div class="bar-label" title="${esc(r.label)}">${esc(r.label)}</div>
+      <div class="bar-track"><div class="bar-fill${i === 0 ? " gold" : ""}" style="width:${Math.max(v / max * 100, 2)}%"></div>
+      <span class="bar-val">${fmtNum(r.value)}${r.pct != null ? " · " + fmtPct(r.pct) : ""}</span></div>
+    </div>`;
+  }).join("");
+  return `<div class="chart-card" style="grid-column:1/-1">
+    <h4>${esc(pv.row_dim)} — ${esc(pcMeasureLabel(pv))}</h4>
+    <div class="chart-sub">Top ${rows.length} of ${pv.rows.length} categories · gold = sab se bara · number format (K/M/B) upar switch se badla ja sakta hai</div>
+    ${bars}</div>`;
+}
+
+/* ---- 2. vertical column (SVG) ---- */
+function pcColumnChart(pv) {
+  const rows = pv.rows.slice(0, 12);
+  if (!rows.length) return '<div class="chart-card"><div class="empty">Koi category nahi mili.</div></div>';
+  const w = 740, h = 330, padL = 60, padR = 14, padT = 30, padB = 88;
+  const vals = rows.map(r => Number(r.value) || 0);
+  const max = Math.max(...vals, 0), min = Math.min(...vals, 0);
+  const span = (max - min) || 1;
+  const cw = (w - padL - padR) / rows.length;
+  const y = v => padT + (1 - (v - min) / span) * (h - padT - padB);
+  const base = y(Math.max(min, 0));
+  const grid = [0, 0.25, 0.5, 0.75, 1].map(f => {
+    const gv = min + f * span;
+    return `<line x1="${padL}" y1="${y(gv).toFixed(1)}" x2="${w - padR}" y2="${y(gv).toFixed(1)}" stroke="#E3EAE6" stroke-width="1"/>
+      <text x="${padL - 6}" y="${(y(gv) + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="#5E6E66">${pcAxisFmt(gv)}</text>`;
+  }).join("");
+  const cols = rows.map((r, i) => {
+    const v = vals[i];
+    const x0 = padL + i * cw + cw * 0.16;
+    const bw = cw * 0.68;
+    const yy = v >= 0 ? y(v) : base;
+    const hh = Math.max(Math.abs(base - y(v)), 1);
+    const cx = x0 + bw / 2;
+    const lab = `<text x="${cx.toFixed(1)}" y="${(h - padB + 16).toFixed(1)}" text-anchor="end" font-size="9" fill="#33413B" transform="rotate(-34 ${cx.toFixed(1)} ${h - padB + 16})">${esc(r.label)}</text>`;
+    const val = cw >= 40 ? `<text x="${cx.toFixed(1)}" y="${(v >= 0 ? y(v) - 5 : y(v) + 12).toFixed(1)}" text-anchor="middle" font-size="8.5" font-weight="700" fill="#0B3D2E">${fmtNum(v)}</text>` : "";
+    return `<rect x="${x0.toFixed(1)}" y="${yy.toFixed(1)}" width="${bw.toFixed(1)}" height="${hh.toFixed(1)}" fill="${i === 0 ? "#C9A227" : "#0F4C3A"}" rx="3"><title>${esc(r.label)}: ${fmtNum(r.value)}</title></rect>${val}${lab}`;
+  }).join("");
+  return `<div class="chart-card" style="grid-column:1/-1">
+    <h4>${esc(pv.row_dim)} — ${esc(pcMeasureLabel(pv))}</h4>
+    <div class="chart-sub">Top ${rows.length} of ${pv.rows.length} categories · gold = sab se bara · hover kar ke exact value dekhein</div>
+    <svg class="chart-svg" viewBox="0 0 ${w} ${h}">${grid}${cols}</svg></div>`;
+}
+
+/* ---- 3. donut (SVG) ---- */
+function pcDonutChart(pv) {
+  const totalAll = pv.rows.reduce((a, r) => a + (Number(r.value) || 0), 0);
+  if (!(totalAll > 0)) return `<div class="chart-card"><div class="empty">Donut is pivot par possible nahi — total ${fmtNum(totalAll)} hai (negative/zero totals donut me share nahi dikha sakte). Bar ya Column try karein.</div></div>`;
+  const top = pv.rows.slice(0, 9);
+  const rest = pv.rows.slice(9);
+  let segs = top.map(r => ({ label: r.label, value: Number(r.value) || 0 }));
+  if (rest.length) segs.push({ label: `Others (${rest.length} categories)`, value: rest.reduce((a, r) => a + (Number(r.value) || 0), 0) });
+  const tot = totalAll || 1;
+  let angle = -90;
+  const paths = segs.map((s, i) => {
+    const frac = s.value / tot;
+    let a0 = angle, a1 = angle + frac * 360;
+    if (a1 - a0 >= 359.99) a1 = a0 + 359.99;
+    angle = a1;
+    return `<path d="${arcPath(80, 80, 55, 60, a0, a1)}" fill="${PALETTE[i % PALETTE.length]}" stroke="#fff" stroke-width="1.5"><title>${esc(s.label)}: ${fmtNum(s.value)} (${(frac * 100).toFixed(1)}%)</title></path>`;
+  }).join("");
+  const legend = segs.map((s, i) => `<div class="legend-item"><span class="legend-dot" style="background:${PALETTE[i % PALETTE.length]}"></span><span style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.label)}">${esc(s.label)}</span> — <b>${fmtNum(s.value)}</b> (${(s.value / tot * 100).toFixed(1)}%)</div>`).join("");
+  return `<div class="chart-card" style="grid-column:1/-1">
+    <h4>${esc(pv.row_dim)} — total ka share</h4>
+    <div class="chart-sub">${pv.rows.length} categories me se top ${top.length}${rest.length ? ` · baqi ${rest.length} "Others" me grouped` : ""} · total ${fmtNum(tot)}</div>
+    <div class="donut-wrap">
+      <svg class="chart-svg" viewBox="0 0 160 160" style="max-width:180px">${paths}
+        <circle cx="80" cy="80" r="33" fill="#fff"/>
+        <text x="80" y="76" text-anchor="middle" font-size="12" font-weight="700" fill="#0B3D2E">${fmtNum(tot)}</text>
+        <text x="80" y="90" text-anchor="middle" font-size="9" fill="#5E6E66">total</text>
+      </svg>
+      <div class="legend">${legend}</div>
+    </div></div>`;
+}
+
+/* ---- 4. line / area (SVG) ---- */
+function pcLineChart(pv) {
+  const rows = pv.rows.slice(0, 30);
+  if (rows.length < 2) return '<div class="chart-card"><div class="empty">Line chart ke liye kam se kam 2 categories chahiye.</div></div>';
+  const labels = rows.map(r => r.label), vals = rows.map(r => Number(r.value) || 0);
+  const w = 740, h = 300, padL = 60, padR = 14, padT = 18, padB = 70;
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const span = (max - min) || 1;
+  const x = i => padL + (i * (w - padL - padR)) / Math.max(labels.length - 1, 1);
+  const y = v => padT + (1 - (v - min) / span) * (h - padT - padB);
+  const pts = vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const area = `${padL},${y(min).toFixed(1)} ${pts} ${x(vals.length - 1).toFixed(1)},${y(min).toFixed(1)}`;
+  const grid = [0, 0.25, 0.5, 0.75, 1].map(f => {
+    const gv = min + f * span;
+    return `<line x1="${padL}" y1="${y(gv).toFixed(1)}" x2="${w - padR}" y2="${y(gv).toFixed(1)}" stroke="#E3EAE6" stroke-width="1"/>
+      <text x="${padL - 6}" y="${(y(gv) + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="#5E6E66">${pcAxisFmt(gv)}</text>`;
+  }).join("");
+  const labStep = Math.ceil(labels.length / 12);
+  const xLabels = labels.map((l, i) => i % labStep === 0
+    ? `<text x="${x(i).toFixed(1)}" y="${h - padB + 16}" text-anchor="end" font-size="8.5" fill="#5E6E66" transform="rotate(-34 ${x(i).toFixed(1)} ${h - padB + 16})">${esc(l)}</text>` : "").join("");
+  const dots = vals.map((v, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3" fill="#0F4C3A"><title>${esc(labels[i])}: ${fmtNum(v)}</title></circle>`).join("");
+  return `<div class="chart-card" style="grid-column:1/-1">
+    <h4>${esc(pv.row_dim)} — ${esc(pcMeasureLabel(pv))}</h4>
+    <div class="chart-sub">${labels.length} categories, value ke descending order me · hover kar ke exact value dekhein</div>
+    <svg class="chart-svg" viewBox="0 0 ${w} ${h}">${grid}
+      <polygon points="${area}" fill="rgba(15,76,58,.08)"/>
+      <polyline points="${pts}" fill="none" stroke="#0F4C3A" stroke-width="2.2" stroke-linejoin="round"/>
+      ${dots}${xLabels}
+    </svg></div>`;
+}
+
+/* ---- 5. grouped bars — cross tab (SVG) ---- */
+function pcGroupedChart(pv) {
+  const rowLabels = pv.row_labels.slice(0, 8), colLabels = pv.col_labels.slice(0, 6);
+  if (!rowLabels.length || !colLabels.length) return '<div class="chart-card"><div class="empty">Koi categories nahi mili.</div></div>';
+  const w = 760, h = 340, padL = 60, padR = 14, padT = 26, padB = 96;
+  const vals = [];
+  rowLabels.forEach((_, i) => (pv.matrix[i] || []).forEach((v, j) => { if (j < colLabels.length && v != null) vals.push(Number(v) || 0); }));
+  const max = Math.max(...vals, 0), min = Math.min(...vals, 0);
+  const span = (max - min) || 1;
+  const gw = (w - padL - padR) / rowLabels.length;
+  const bw = Math.min(gw / colLabels.length * 0.82, 46);
+  const y = v => padT + (1 - (v - min) / span) * (h - padT - padB);
+  const base = y(Math.max(min, 0));
+  const grid = [0, 0.25, 0.5, 0.75, 1].map(f => {
+    const gv = min + f * span;
+    return `<line x1="${padL}" y1="${y(gv).toFixed(1)}" x2="${w - padR}" y2="${y(gv).toFixed(1)}" stroke="#E3EAE6" stroke-width="1"/>
+      <text x="${padL - 6}" y="${(y(gv) + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="#5E6E66">${pcAxisFmt(gv)}</text>`;
+  }).join("");
+  const groups = rowLabels.map((rl, i) => {
+    const mrow = pv.matrix[i] || [];
+    const bars = colLabels.map((cl, j) => {
+      const v = mrow[j];
+      if (v == null) return "";
+      const vv = Number(v) || 0;
+      const x0 = padL + i * gw + (gw - bw * colLabels.length) / 2 + j * bw;
+      const yy = vv >= 0 ? y(vv) : base;
+      const hh = Math.max(Math.abs(base - y(vv)), 1);
+      return `<rect x="${x0.toFixed(1)}" y="${yy.toFixed(1)}" width="${Math.max(bw - 2, 1).toFixed(1)}" height="${hh.toFixed(1)}" fill="${PALETTE[j % PALETTE.length]}" rx="2"><title>${esc(rl)} · ${esc(cl)}: ${fmtNum(v)}</title></rect>`;
+    }).join("");
+    const cx = padL + i * gw + gw / 2;
+    return bars + `<text x="${cx.toFixed(1)}" y="${h - padB + 16}" text-anchor="end" font-size="9" fill="#33413B" transform="rotate(-34 ${cx.toFixed(1)} ${h - padB + 16})">${esc(rl)}</text>`;
+  }).join("");
+  const legend = colLabels.map((cl, j) => `<span style="display:inline-flex;align-items:center;gap:6px;margin-right:14px;font-size:.8rem"><span class="legend-dot" style="background:${PALETTE[j % PALETTE.length]}"></span>${esc(cl)}</span>`).join("");
+  return `<div class="chart-card" style="grid-column:1/-1">
+    <h4>${esc(pv.row_dim)} × ${esc(pv.col_dim)} — ${esc(pcMeasureLabel(pv))}</h4>
+    <div class="chart-sub">Top ${rowLabels.length} ${esc(pv.row_dim)} × ${colLabels.length} ${esc(pv.col_dim)} (value ke hisab se sorted) · hover kar ke exact value dekhein</div>
+    <div style="margin-bottom:8px">${legend}</div>
+    <svg class="chart-svg" viewBox="0 0 ${w} ${h}">${grid}${groups}</svg></div>`;
+}
+
+/* ---- 6. stacked bars — cross tab (SVG), absolute ya 100% ---- */
+function pcStackedChart(pv, hundred) {
+  const rowLabels = pv.row_labels.slice(0, 12), colLabels = pv.col_labels.slice(0, 8);
+  if (!rowLabels.length || !colLabels.length) return '<div class="chart-card"><div class="empty">Koi categories nahi mili.</div></div>';
+  const w = 760, h = 340, padL = 60, padR = 14, padT = 26, padB = 96;
+  const gw = (w - padL - padR) / rowLabels.length;
+  const bw = Math.min(gw * 0.6, 64);
+  const rowSum = rowLabels.map((_, i) => colLabels.reduce((a, _, j) => {
+    const v = (pv.matrix[i] || [])[j];
+    return a + (v != null && Number(v) > 0 ? Number(v) : 0);
+  }, 0));
+  const max = hundred ? 1 : Math.max(...rowSum, 1e-9);
+  const y = v => padT + (1 - v / max) * (h - padT - padB);
+  const grid = hundred
+    ? [0, 0.25, 0.5, 0.75, 1].map(f => `<line x1="${padL}" y1="${y(f).toFixed(1)}" x2="${w - padR}" y2="${y(f).toFixed(1)}" stroke="#E3EAE6" stroke-width="1"/>
+      <text x="${padL - 6}" y="${(y(f) + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="#5E6E66">${Math.round(f * 100)}%</text>`).join("")
+    : [0, 0.25, 0.5, 0.75, 1].map(f => `<line x1="${padL}" y1="${y(max * f).toFixed(1)}" x2="${w - padR}" y2="${y(max * f).toFixed(1)}" stroke="#E3EAE6" stroke-width="1"/>
+      <text x="${padL - 6}" y="${(y(max * f) + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="#5E6E66">${pcAxisFmt(max * f)}</text>`).join("");
+  const cols = rowLabels.map((rl, i) => {
+    let acc = 0;
+    const mrow = pv.matrix[i] || [];
+    const segs = colLabels.map((cl, j) => {
+      const v0 = mrow[j];
+      if (v0 == null || Number(v0) <= 0) return "";
+      const v = Number(v0);
+      const frac = hundred ? v / (rowSum[i] || 1) : v;
+      const y0 = y(acc), y1 = y(acc + frac);
+      acc += frac;
+      const x0 = padL + i * gw + (gw - bw) / 2;
+      return `<rect x="${x0.toFixed(1)}" y="${y1.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(y0 - y1, 1).toFixed(1)}" fill="${PALETTE[j % PALETTE.length]}" stroke="#fff" stroke-width="0.6"><title>${esc(rl)} · ${esc(cl)}: ${fmtNum(v0)}${hundred ? ` (${(frac * 100).toFixed(1)}%)` : ""}</title></rect>`;
+    }).join("");
+    const cx = padL + i * gw + gw / 2;
+    const totLab = hundred ? "100%" : (rowSum[i] > 0 ? fmtNum(rowSum[i]) : "—");
+    return segs +
+      `<text x="${cx.toFixed(1)}" y="${h - padB + 16}" text-anchor="end" font-size="9" fill="#33413B" transform="rotate(-34 ${cx.toFixed(1)} ${h - padB + 16})">${esc(rl)}</text>` +
+      (hundred || rowSum[i] <= 0 ? "" : `<text x="${cx.toFixed(1)}" y="${(y(rowSum[i]) - 5).toFixed(1)}" text-anchor="middle" font-size="8.5" font-weight="700" fill="#0B3D2E">${totLab}</text>`);
+  }).join("");
+  const legend = colLabels.map((cl, j) => `<span style="display:inline-flex;align-items:center;gap:6px;margin-right:14px;font-size:.8rem"><span class="legend-dot" style="background:${PALETTE[j % PALETTE.length]}"></span>${esc(cl)}</span>`).join("");
+  return `<div class="chart-card" style="grid-column:1/-1">
+    <h4>${esc(pv.row_dim)} × ${esc(pv.col_dim)} — ${hundred ? "100% stacked" : "stacked"} ${esc(pcMeasureLabel(pv))}</h4>
+    <div class="chart-sub">${hundred ? "har category ka apne total me se hissa (percentage)" : `stacked total = top ${colLabels.length} columns ka sum`} · Top ${rowLabels.length} ${esc(pv.row_dim)} · negative values (agar hain) chart me shamil nahi — table me dekh sakte hain</div>
+    <div style="margin-bottom:8px">${legend}</div>
+    <svg class="chart-svg" viewBox="0 0 ${w} ${h}">${grid}${cols}</svg></div>`;
+}
+
+/* ---- 7. heatmap — cross tab (HTML table) ---- */
+function pcHeatmap(pv) {
+  const rowLabels = pv.row_labels, colLabels = pv.col_labels;
+  if (!rowLabels.length || !colLabels.length) return '<div class="chart-card"><div class="empty">Koi categories nahi mili.</div></div>';
+  let max = 0;
+  pv.matrix.forEach(rw => (rw || []).forEach(v => { if (v != null && Number(v) > max) max = Number(v); }));
+  const cell = v => {
+    if (v == null) return '<td class="num" style="background:#FAFBFA;color:#9AA8A1">—</td>';
+    const t = max > 0 ? Number(v) / max : 0;
+    const alpha = 0.07 + 0.88 * t;
+    const dark = t > 0.55;
+    return `<td class="num" style="background:rgba(15,76,58,${alpha.toFixed(3)});${dark ? "color:#fff;font-weight:600" : ""}" title="${esc(String(v))}">${fmtNum(v)}</td>`;
+  };
+  const head = `<tr><th style="text-align:left">${esc(pv.row_dim)} \\ ${esc(pv.col_dim)}</th>${colLabels.map(c => `<th class="num" title="${esc(c)}">${esc(c)}</th>`).join("")}<th class="num">Total</th></tr>`;
+  const bodyRows = rowLabels.map((rl, i) => `<tr><td style="font-weight:600">${esc(rl)}</td>${(pv.matrix[i] || []).map(cell).join("")}<td class="num" style="font-weight:700">${pv.row_totals[i] == null ? "—" : fmtNum(pv.row_totals[i])}</td></tr>`).join("");
+  const totRow = `<tr><td style="font-weight:700">Column total</td>${pv.col_totals.map(v => `<td class="num" style="font-weight:700">${v == null ? "—" : fmtNum(v)}</td>`).join("")}<td class="num" style="font-weight:700">${pv.grand_total == null ? "—" : fmtNum(pv.grand_total)}</td></tr>`;
+  return `<div class="chart-card" style="grid-column:1/-1">
+    <h4>Heatmap — ${esc(pv.row_dim)} × ${esc(pv.col_dim)}</h4>
+    <div class="chart-sub">gehra (dark) rang = bara number · ${rowLabels.length} × ${colLabels.length} cells · hover kar ke exact value dekhein · ${pv.records.toLocaleString()} records se</div>
+    <div class="table-wrap" style="max-height:520px;overflow:auto"><table class="data"><thead>${head}</thead><tbody>${bodyRows}${totRow}</tbody></table></div></div>`;
 }
 
 /* ================= DATA MODEL ================= */
@@ -948,6 +1268,14 @@ function runCommand() {
     agentSay(p.budget ? `Utilization ${fmtPct(p.budget.utilization)} (expenditure ${fmtNum(p.budget.total_expenditure)} ÷ budget ${fmtNum(p.budget.total_budget)}).` : "Utilization calculate nahi ho sakti — budget/expenditure columns missing hain.");
     return;
   }
+  // pivot charts
+  if (/(pivot ?charts?|pivotcharts|charts? banao|charts? dikhao|charts? dikha|graphs? banao|graphs? dikhao|pivot graph|chart ban)/.test(raw)) {
+    activateTab("pivotcharts");
+    agentSay(PIVOT_LAST
+      ? `Pivot Charts khol di — <b>${esc(PIVOT_LAST.row_dim)}${PIVOT_LAST.col_dim ? " × " + esc(PIVOT_LAST.col_dim) : ""}</b> ka chart. Chart type (Bar / Column / Donut / Line / Stacked / Heatmap) upar se badal sakte hain — values wahi hain jo aap ke data se aayi hain.`
+      : "Pivot Charts tab khol diya — fields chunein aur \"Build Chart\" dabaein. (Agar Pivot Builder me already pivot bana hua hai to wo yahan turant chart ban jayega.)");
+    return;
+  }
   // pivot builder
   if (/(pivot|peevo|cross tab|crosstab|matrix)/.test(raw)) {
     activateTab("pivot");
@@ -990,7 +1318,7 @@ function runCommand() {
     agentSay("Dashboard khol diya — KPI cards, charts, management summary aur quick tables ek jagah.");
     return;
   }
-  agentSay('Ye command samajh nahi aayi. Yehi try karein: <b>"top 10"</b>, <b>"department wise summary"</b>, <b>"pivot banao"</b>, <b>"vlookup laga do"</b>, <b>"dashboard"</b>, <b>"data model"</b>, <b>"power query"</b>, <b>"validation rules"</b>, <b>"duplicates dikhao"</b>, <b>"missing values"</b>, <b>"outliers"</b>, <b>"monthly trend"</b>, <b>"million me dikhao"</b>, <b>"budget vs expenditure"</b>, <b>"summary"</b>.');
+  agentSay('Ye command samajh nahi aayi. Yehi try karein: <b>"top 10"</b>, <b>"department wise summary"</b>, <b>"pivot banao"</b>, <b>"pivot chart banao"</b>, <b>"vlookup laga do"</b>, <b>"dashboard"</b>, <b>"data model"</b>, <b>"power query"</b>, <b>"validation rules"</b>, <b>"duplicates dikhao"</b>, <b>"missing values"</b>, <b>"outliers"</b>, <b>"monthly trend"</b>, <b>"million me dikhao"</b>, <b>"budget vs expenditure"</b>, <b>"summary"</b>.');
 }
 
 /* ================= DASHBOARD TAB ================= */

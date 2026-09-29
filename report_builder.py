@@ -201,6 +201,7 @@ def build_report(result, out_path):
         ('Dashboard', 'Key performance indicators and charts (management view).'),
         ('Summary', 'Descriptive statistics, budget position, status distribution.'),
         ('Pivot_Analysis', 'Dimension-wise summaries: count, sum, average, min, max, median, share %.'),
+        ('Pivot_Charts', 'Native Excel charts of each pivot summary (column charts).'),
         ('Data_Dictionary', 'Data model: every column with its detected role, type and notes.'),
         ('Rankings', 'Top 50 and Bottom 50 records by the main measure.'),
         ('Exception_Report', 'Duplicates, statistical anomalies, above-budget records.'),
@@ -458,6 +459,38 @@ def build_report(result, out_path):
         pdf = _pivot_df(p)
         r = _write_table(ws, pdf, r, number_cols={'Sum', 'Average', 'Min', 'Max', 'Median'}, pct_cols={'Share %'})
         r += 1
+    _autofit(ws)
+
+    # ---------------- Pivot_Charts (native Excel charts) ---------------- #
+    ws = wb.create_sheet('Pivot_Charts')
+    r = _sheet_title(ws, 'PIVOT CHARTS',
+                     'Har pivot summary ka native Excel chart - isi sheet ke columns A/B me likhe data se juda hua (chart cells se update hota hai)', span=8)
+    anchor = r + 1
+    for p in result['pivots'][:4]:
+        rows = p['rows'][:10]
+        if not rows:
+            continue
+        hdr = anchor
+        title = f"{p['dimension']} - {'Sum of ' + p['measure'] if p['has_measure'] else 'Record count'} (Top {len(rows)})"
+        ws.cell(row=hdr, column=1, value=title).font = Font(bold=True, color=GREEN)
+        ws.cell(row=hdr + 1, column=1, value=p['dimension'])
+        ws.cell(row=hdr + 1, column=2, value=p['measure'] if p['has_measure'] else 'Records')
+        for i, rowd in enumerate(rows):
+            ws.cell(row=hdr + 2 + i, column=1, value=rowd['label'])
+            ws.cell(row=hdr + 2 + i, column=2, value=rowd.get('sum') if p['has_measure'] else rowd.get('count'))
+        bar = BarChart()
+        bar.type = 'col'
+        bar.title = title
+        bar.height, bar.width = 8, 15
+        data = Reference(ws, min_col=2, min_row=hdr + 1, max_row=hdr + 1 + len(rows))
+        cats_ref = Reference(ws, min_col=1, min_row=hdr + 2, max_row=hdr + 1 + len(rows))
+        bar.add_data(data, titles_from_data=True)
+        bar.set_categories(cats_ref)
+        bar.legend = None
+        ws.add_chart(bar, f'D{hdr}')
+        anchor = hdr + max(len(rows) + 3, 17) + 1
+    if anchor == r + 1:
+        ws.cell(row=r, column=1, value='No pivot summaries available for this data.')
     _autofit(ws)
 
     # ---------------- Rankings ---------------- #
@@ -799,7 +832,7 @@ def build_report(result, out_path):
             ws.auto_filter.ref = f'A3:{get_column_letter(len(merged_df.columns))}{3 + len(merged_df)}'
 
     # sheet order
-    order = ['Read_Me', 'Dashboard', 'Summary', 'Pivot_Analysis', 'Data_Dictionary', 'Rankings',
+    order = ['Read_Me', 'Dashboard', 'Summary', 'Pivot_Analysis', 'Pivot_Charts', 'Data_Dictionary', 'Rankings',
              'Exception_Report', 'Validation_Rules', 'Power_Query', 'Formulas', 'Data_Quality', 'Change_Log',
              'Assumptions', 'Calculations', 'Merged_Data', 'Raw_Data', 'Cleaned_Data', 'Chart_Data']
     wb._sheets = [wb[n] for n in order if n in wb.sheetnames] + [s for s in wb._sheets if s.title not in order]
