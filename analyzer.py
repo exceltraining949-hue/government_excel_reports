@@ -882,6 +882,7 @@ def analyze(raw_df, options=None, context=None):
     powerquery = generate_powerquery(cleaned, col_meta, coerced_numeric_cols, options, ctx)
     kpis['sheet_name'] = ctx.get('sheet_name', '')
     mgmt_summary = build_management_summary(kpis, pivots, budget, issues, trend, top50)
+    formulas = build_formula_recipes(raw, col_meta, ctx, main_metric, dim_cols, id_dup_info)
 
     # builder-friendly column lists
     categorical_columns = []
@@ -914,6 +915,7 @@ def analyze(raw_df, options=None, context=None):
         'validation_rules': validation_rules, 'powerquery': powerquery,
         'categorical_columns': categorical_columns, 'numeric_columns': numeric_columns,
         'coerced_numeric_cols': coerced_numeric_cols, 'mgmt_summary': mgmt_summary,
+        'formulas': formulas,
     }
     return result
 
@@ -960,6 +962,7 @@ def to_payload(result, job_id, filename, sheet_name, sheets_info, download_url):
         'is_merged': bool(result.get('merged_data') is not None),
         'mgmt_summary': result.get('mgmt_summary', []),
         'lookup_report': result.get('lookup_report'),
+        'formulas': result.get('formulas', []),
     }
 
 
@@ -1406,3 +1409,133 @@ def _fmt_big(v):
     if av >= 1e3:
         return f"{v / 1e3:,.1f}K"
     return f"{v:,.0f}"
+
+
+# ================================================================== #
+# EXCEL FORMULA RECIPES - VLOOKUP / XLOOKUP / SUMIFS etc. from the
+# user's ACTUAL workbook structure (real sheet names, ranges, columns)
+# ================================================================== #
+def _xl_letter(idx):
+    """1-based column index -> Excel letter."""
+    letter = ''
+    while idx > 0:
+        idx, rem = divmod(idx - 1, 26)
+        letter = chr(65 + rem) + letter
+    return letter
+
+
+def build_formula_recipes(raw, col_meta, ctx, main_metric, dim_cols, id_dup_info):
+    """Generate copy-paste Excel formulas using the user's real sheet/column names."""
+    recipes = []
+    cols = list(raw.columns)
+    n = len(raw)
+    sheet = ctx.get('sheet_name', 'Sheet1')
+    q = '' if str(sheet).replace(' ', '').isalnum() else "'"
+    sheet_ref = f'{q}{sheet}{q}'
+
+    def L(col):
+        return _xl_letter(cols.index(col) + 1)
+
+    key_col = next((c for c in cols if col_meta[c]['role'] == 'id'), None)
+    if key_col is None and dim_cols:
+        key_col = dim_cols[0]
+    if key_col is None:
+        key_col = cols[0]
+    key_letter, key_last = L(key_col), n + 1
+
+    # ---------- cross-sheet lookup candidates (any shared column, ID/dimension preferred) ----------
+    wb_sheets = ctx.get('workbook_sheets') or {}
+    col_priority = ([key_col] if key_col else []) + [c for c in dim_cols if c != key_col] + \
+                   [c for c in cols if c not in ([key_col] if key_col else []) and c not in dim_cols]
+    candidates = []
+    for cand_col in col_priority:
+        for sname, sinfo in wb_sheets.items():
+            if sname == sheet:
+                continue
+            scol = sinfo.get('columns', [])
+            shared = [c for c in scol if str(c).strip().lower() == str(cand_col).strip().lower()]
+            if not shared:
+                continue
+            returns = [c for c in scol if c != shared[0]]
+            if not returns:
+                continue
+            candidates.append((cand_col, sname, shared[0], int(sinfo.get('rows', 0)), scol, returns[0]))
+            break   # one lookup sheet per key column
+        if len(candidates) >= 2:
+            break
+    for cand_col, ls_name, lkey, lrows, lcols, ret0 in candidates[:2]:
+        lq = '' if str(ls_name).replace(' ', '').isalnum() else "'"
+        lref = f'{lq}{ls_name}{lq}'
+        cand_letter = _xl_letter(cols.index(cand_col) + 1)
+        lk_letter = _xl_letter(lcols.index(lkey) + 1)
+        r_letter = _xl_letter(lcols.index(ret0) + 1)
+        vidx = lcols.index(ret0) + 1
+        rng_k = f'{lref}!${lk_letter}$2:${lk_letter}${lrows + 1}'
+        rng_r = f'{lref}!${r_letter}$2:${r_letter}${lrows + 1}'
+        rng_all = f'{lref}!$A$2:${_xl_letter(len(lcols))}${lrows + 1}'
+        tag = f'"{ls_name}" se "{ret0}" laao (key: "{cand_col}" = "{lkey}")'
+        recipes += [
+            {'section': f'XLOOKUP - {ls_name} (Excel 365 / 2021+)',
+             'formula': f'=XLOOKUP({cand_letter}2, {rng_k}, {rng_r}, "Not Found")',
+             'purpose': tag,
+             'explain': (f'{cand_letter}2 = jis ki value dhoondni hai ("{cand_col}"); {rng_k} = lookup sheet ka key column; '
+                         f'{rng_r} = wahi column jo wapas chahiye ("{ret0}"); "Not Found" = jab match na ho. Exact match by default.')},
+            {'section': f'VLOOKUP - {ls_name} (sab versions)',
+             'formula': f'=VLOOKUP({cand_letter}2, {rng_all}, {vidx}, FALSE)',
+             'purpose': tag + ' - purane Excel ke liye',
+             'explain': (f'{rng_all} = lookup table (key column FIRST hona chahiye - VLOOKUP ki limitation); '
+                         f'{vidx} = "{ret0}" ka column number table ke andar; FALSE = exact match (hamesha FALSE rakhein).')},
+            {'section': f'INDEX + MATCH - {ls_name} (purane Excel, flexible)',
+             'formula': f'=INDEX({rng_r}, MATCH({cand_letter}2, {rng_k}, 0))',
+             'purpose': 'VLOOKUP ka behtar alternative - left-right dono taraf dekh sakta hai',
+             'explain': 'MATCH key ki position dhoondta hai (0 = exact); INDEX us position se value laata hai.'},
+            {'section': f'IFERROR + VLOOKUP - {ls_name} (#N/A handle)',
+             'formula': f'=IFERROR(VLOOKUP({cand_letter}2, {rng_all}, {vidx}, FALSE), "Not Found")',
+             'purpose': 'Not-found par #N/A ki jagah saaf-saaf "Not Found" likhega',
+             'explain': 'IFERROR andar wale formula ke error ko doosri value se replace karta hai.'},
+        ]
+    if not candidates and main_metric and key_col:
+        # within-sheet example: bring main metric by key
+        m_letter = L(main_metric)
+        recipes.append({
+            'section': 'XLOOKUP - same sheet example (Excel 365 / 2021+)',
+            'formula': f'=XLOOKUP({key_letter}2, {sheet_ref}!${key_letter}$2:${key_letter}${key_last}, '
+                       f'{sheet_ref}!${m_letter}$2:${m_letter}${key_last}, "Not Found")',
+            'purpose': f'Key "{key_col}" se "{main_metric}" dhoondne ka example (isi sheet ke andar)',
+            'explain': 'Multi-sheet workbook upload karein to cross-sheet formulas khud ban jayengi.'})
+
+    # ---------- conditional aggregations ----------
+    dim = dim_cols[0] if dim_cols else None
+    if main_metric and dim:
+        d_letter, m_letter = L(dim), L(main_metric)
+        sample = raw[dim].dropna()
+        sample_val = str(sample.iloc[0]) if len(sample) else 'X'
+        rng_d = f'{sheet_ref}!${d_letter}:${d_letter}'
+        rng_m = f'{sheet_ref}!${m_letter}:${m_letter}'
+        recipes += [
+            {'section': 'SUMIFS - department-wise total',
+             'formula': f'=SUMIFS({rng_m}, {rng_d}, "{sample_val}")',
+             'purpose': f'Sirf "{sample_val}" ke records ka {main_metric} total',
+             'explain': f'{rng_m} = jis column ka sum karna hai; {rng_d} + "{sample_val}" = condition (kis department ka).'},
+            {'section': 'COUNTIFS - record count with condition',
+             'formula': f'=COUNTIFS({rng_d}, "{sample_val}")',
+             'purpose': f'"{sample_val}" ke kitne records hain',
+             'explain': 'Sirf ginta hai - koi sum nahi.'},
+            {'section': 'AVERAGEIFS - department-wise average',
+             'formula': f'=AVERAGEIFS({rng_m}, {rng_d}, "{sample_val}")',
+             'purpose': f'"{sample_val}" ka average {main_metric}',
+             'explain': 'SUMIFS jaisa, lekin total ki jagah average.'},
+            {'section': 'MAXIFS / MINIFS (Excel 2019+)',
+             'formula': f'=MAXIFS({rng_m}, {rng_d}, "{sample_val}")',
+             'purpose': f'"{sample_val}" ka sab se bara {main_metric}',
+             'explain': 'MINIFS iska ulta hai. Purane Excel ke liye array formula chahiye hota hai.'},
+        ]
+    # ---------- ranking ----------
+    if main_metric:
+        m_letter = L(main_metric)
+        recipes.append({
+            'section': 'RANK.EQ - ranking',
+            'formula': f'=RANK.EQ({m_letter}2, {sheet_ref}!${m_letter}$2:${m_letter}${key_last}, 0)',
+            'purpose': f'{main_metric} ki ranking (highest = 1)',
+            'explain': '0 (ya blank) = descending (sab se bara #1); 1 = ascending. Ties par same rank milta hai (competition ranking).'})
+    return recipes

@@ -116,6 +116,12 @@ def _get_result(job_id, sheet_name=None, options=None):
     return result
 
 
+
+def _wb_ctx(sheets, exclude=None):
+    """Sheet name -> {columns, rows} for formula generation (excluding analysed sheet)."""
+    return {n: {'columns': [str(c) for c in list(d.columns)[:60]], 'rows': int(d.shape[0])}
+            for n, d in sheets.items() if n != exclude}
+
 def _default_options(form):
     def flag(name, default):
         v = form.get(name)
@@ -162,6 +168,7 @@ def _run_job(job_id, src_path, filename, sheets, notes, wb_meta, sheet_name, opt
         'sheet_notes': notes,
         'hidden_sheets': wb_meta.get('hidden_sheets', []),
         'merged_ranges': wb_meta.get('merged_ranges', {}),
+        'workbook_sheets': _wb_ctx(sheets, exclude=sheet_name),
     }
     result = analyze(raw_df, options=options, context=ctx)
     _cache_put((job_id, sheet_name), result)
@@ -321,6 +328,7 @@ def _join_result(parent_job_id, params, options):
     ctx = {
         'file_name': disp, 'sheet_name': f"Merged: {params.get('left_sheet')} + {params.get('right_sheet')}",
         'auto_selected': False, 'sheet_notes': [], 'hidden_sheets': [], 'merged_ranges': {},
+        'workbook_sheets': _wb_ctx(sheets),
         'join_note': (f"Data model join: \"{params.get('left_sheet')}\".{params.get('left_key')} was joined with "
                       f"\"{params.get('right_sheet')}\".{params.get('right_key')} using a {str(params.get('how','left')).upper()} join. "
                       f"Matched: {join_report['matched_left_rows']} of {join_report['left_rows']} left rows; "
@@ -465,6 +473,7 @@ def _lookup_result(parent_job_id, params, options):
     ctx = {
         'file_name': disp, 'sheet_name': f"{p['cur_sheet']} + lookup [{p['return_col']}]",
         'auto_selected': False, 'sheet_notes': [], 'hidden_sheets': [], 'merged_ranges': {},
+        'workbook_sheets': _wb_ctx(sheets, exclude=p['cur_sheet']),
         'lookup_note': (f"Lookup (VLOOKUP/XLOOKUP style): column \"{new_col}\" was fetched from sheet "
                         f"\"{p['lookup_sheet']}\" using \"{p['from_key']}\" = \"{p['lookup_key']}\" "
                         f"(exact match, case-insensitive, first match wins). Matched {stats['matched']} of "

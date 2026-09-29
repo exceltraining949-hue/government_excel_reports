@@ -206,6 +206,7 @@ def build_report(result, out_path):
         ('Exception_Report', 'Duplicates, statistical anomalies, above-budget records.'),
         ('Validation_Rules', 'Data-validation rules + dropdown value lists (applied in Cleaned_Data).'),
         ('Power_Query', 'Refreshable Power Query (M) script + manual Excel steps.'),
+        ('Formulas', 'VLOOKUP / XLOOKUP / SUMIFS / RANK recipes built from your real ranges + live demo.'),
         ('Data_Quality', 'Every data-quality issue detected, with severity.'),
         ('Change_Log', 'Audit trail of every change made during cleaning.'),
         ('Assumptions', 'Interpretation assumptions, stated explicitly.'),
@@ -518,6 +519,62 @@ def build_report(result, out_path):
         r = _write_table(ws, abdf, r, number_cols={'Budget', 'Expenditure'})
     _autofit(ws)
 
+    # ---------------- Formulas (VLOOKUP / XLOOKUP recipes) ---------------- #
+    ws = wb.create_sheet('Formulas')
+    r = _sheet_title(ws, 'EXCEL FORMULA RECIPES',
+                     'Aap ke workbook ke ASLI sheet names, columns aur ranges se bani hui - copy kar ke paste karein', span=6)
+    recipes = result.get('formulas') or []
+    if recipes:
+        # live demo: working formula inside THIS report (Raw_Data reference)
+        try:
+            raw_cols = list(raw.columns)
+            key_col = next((c for c in raw_cols if result['col_meta'].get(c, {}).get('role') == 'id'), raw_cols[0])
+            met = result.get('main_metric')
+            if met and key_col in raw_cols and met in raw_cols:
+                kL = get_column_letter(raw_cols.index(key_col) + 1)
+                mL = get_column_letter(raw_cols.index(met) + 1)
+                last = 3 + len(raw)
+                sample = raw[key_col].dropna()
+                sample_val = sample.iloc[0] if len(sample) else None
+                if sample_val is not None:
+                    ws.cell(row=r, column=1, value='LIVE DEMO (ye formula isi report me chalta hai):').font = Font(bold=True, size=11, color=GREEN)
+                    r += 1
+                    ws.cell(row=r, column=1, value=f'Key: {sample_val}')
+                    demo = ws.cell(row=r, column=2, value=f'=VLOOKUP(A{r}, Raw_Data!${kL}$4:${kL}${last}, {raw_cols.index(met) + 1}, FALSE)')
+                    demo.font = Font(name='Consolas', size=10, bold=True, color=NAVY)
+                    ws.cell(row=r, column=3, value=f'<- "{met}" ki value "{key_col}" = {sample_val} ke liye (Raw_Data sheet se)')
+                    r += 2
+        except Exception:
+            r += 1
+        hdr = ['Formula type', 'Formula (copy-paste)', 'Kya karta hai', 'Wazahat / parts']
+        for j, h in enumerate(hdr):
+            c = ws.cell(row=r, column=1 + j, value=h)
+            c.font = H_FONT; c.fill = H_FILL; c.border = BORDER
+            c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        r += 1
+        for i, rec in enumerate(recipes):
+            c1 = ws.cell(row=r, column=1, value=rec['section'])
+            c1.font = Font(bold=True, size=10)
+            c2 = ws.cell(row=r, column=2, value=rec['formula'])
+            c2.font = Font(name='Consolas', size=10, color='0B3D2E')
+            ws.cell(row=r, column=3, value=rec['purpose'])
+            ws.cell(row=r, column=4, value=rec['explain']).alignment = Alignment(wrap_text=True, vertical='top')
+            for j in range(1, 5):
+                ws.cell(row=r, column=j).border = BORDER
+                if i % 2 == 1:
+                    ws.cell(row=r, column=j).fill = GREY_FILL
+            ws.row_dimensions[r].height = 42
+            r += 1
+        ws.column_dimensions['B'].width = 60
+        ws.column_dimensions['A'].width = 26
+        ws.column_dimensions['C'].width = 38
+        ws.column_dimensions['D'].width = 70
+        r += 1
+        ws.cell(row=r, column=1, value='NOTE: XLOOKUP / MAXIFS / MINIFS ke liye Excel 365 ya 2019+ chahiye. VLOOKUP me hamesha FALSE (exact match). "$" absolute references drag karne par ranges fix rakhte hain.').font = SUB_FONT
+    else:
+        ws.cell(row=r, column=1, value='Is dataset ke liye lookup formulas generate nahi ho sakin (key/measure columns nahi mile).')
+    ws.freeze_panes = 'A4'
+
     # ---------------- Data_Quality ---------------- #
     ws = wb.create_sheet('Data_Quality')
     r = _sheet_title(ws, 'DATA QUALITY REPORT', 'Every issue detected in the uploaded file, with severity', span=6)
@@ -743,7 +800,7 @@ def build_report(result, out_path):
 
     # sheet order
     order = ['Read_Me', 'Dashboard', 'Summary', 'Pivot_Analysis', 'Data_Dictionary', 'Rankings',
-             'Exception_Report', 'Validation_Rules', 'Power_Query', 'Data_Quality', 'Change_Log',
+             'Exception_Report', 'Validation_Rules', 'Power_Query', 'Formulas', 'Data_Quality', 'Change_Log',
              'Assumptions', 'Calculations', 'Merged_Data', 'Raw_Data', 'Cleaned_Data', 'Chart_Data']
     wb._sheets = [wb[n] for n in order if n in wb.sheetnames] + [s for s in wb._sheets if s.title not in order]
     wb.active = 0

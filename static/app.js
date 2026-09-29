@@ -972,6 +972,12 @@ function runCommand() {
     agentSay(`Validation rules khol di — ${PAYLOAD.validation_rules ? PAYLOAD.validation_rules.length : 0} rules aap ke data se generate hui hain aur Excel report ki Cleaned_Data sheet me actually apply ho chuki hain (dropdowns + range checks).`);
     return;
   }
+  // formula recipes
+  if (/(formula|formulas|sumifs|countifs|rank)/.test(raw) && !/(vlookup|xlookup)/.test(raw)) {
+    activateTab("lookup");
+    agentSay("Formula recipes khol di — VLOOKUP / XLOOKUP / SUMIFS / COUNTIFS / RANK, sab aap ke workbook ke asli ranges se. Excel report ki \"Formulas\" sheet me live demo formula bhi hai.");
+    return;
+  }
   // lookup
   if (/(vlookup|xlookup|lookup|look ?up|dhoondo|nikalo|laao|bring)/.test(raw)) {
     activateTab("lookup");
@@ -1059,7 +1065,23 @@ function tabLookup(p) {
       <button class="btn btn-primary" id="lkRun">🔍 Run Lookup (Preview)</button>
     </div>
   </div>
+  ${formulaRecipesHtml(p)}
   <div id="lkResult">${LOOKUP_LAST ? renderLookupResult(LOOKUP_LAST) : '<div class="empty">Columns chunein aur "Run Lookup" dabaein.</div>'}</div>`;
+}
+
+function formulaRecipesHtml(p) {
+  const rec = p.formulas || [];
+  if (!rec.length) return "";
+  return `<div class="section-h">🧮 Ready-made Excel formulas (aap ke workbook ke asli ranges se — bina preview ke bhi yahan hain)</div>
+    <div class="table-wrap"><table class="data"><thead><tr>
+      <th>Formula type</th><th>Formula (copy-paste)</th><th>Kya karta hai</th></tr></thead><tbody>
+    ${rec.map(f => `<tr>
+      <td><b>${esc(f.section)}</b></td>
+      <td><code style="font-size:.78rem">${esc(f.formula)}</code></td>
+      <td>${esc(f.purpose)}<br><span class="muted small">${esc(f.explain)}</span></td>
+    </tr>`).join("")}
+    </tbody></table></div>
+    <p class="muted small">💡 XLOOKUP ke liye Excel 365/2021+ chahiye — purane versions ke liye VLOOKUP ya INDEX/MATCH use karein. Poori detail Excel report ki "Formulas" sheet me bhi hai (live demo formula ke saath).</p>`;
 }
 
 function wireLookup() {
