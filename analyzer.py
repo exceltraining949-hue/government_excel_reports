@@ -21,15 +21,18 @@ ERROR_STRINGS = {'#n/a', '#value!', '#ref!', '#div/0!', '#name?', '#num!', '#nul
 # ------------------------------------------------------------------ #
 # Column-role detection (name-pattern heuristics + dtype)
 # ------------------------------------------------------------------ #
-ROLE_ORDER = ['budget', 'expenditure', 'id', 'date', 'department', 'district',
+ROLE_ORDER = ['id', 'percent', 'budget', 'expenditure', 'date', 'department', 'district',
               'status', 'vendor', 'designation', 'grade', 'category', 'gender',
-              'percent', 'amount', 'name']
+              'amount', 'name']
 
 ROLE_PATTERNS = {
+    # ID / code detection FIRST - a code must never be treated as a measure
+    'id':           [r'\bid\b', r'\bno\.?$', r'_no\b', r'\bnumber\b', r'\bcode\b', r'\bref\b', r'\bkey\b',
+                     r'application', r'registration', r'emp(loyee)?[_\s]*id', r'project[_\s]*id',
+                     r'transaction[_\s]*id', r'invoice[_\s]*(no|id|#)', r'\bcmis\b', r'case[_\s]*(no|id|#)',
+                     r'\bserial\b', r'\bsr\.?\s*#?$', r'\bcnic\b', r'\bpin\b'],
     'budget':       [r'budget', r'allocat', r'sanction', r'grant', r'approved\s*(cost|amount|fund)', r'\bbre\b'],
     'expenditure':  [r'expenditure', r'expense', r'spend', r'payment', r'\bpaid\b', r'utili[sz]', r'incurred', r'\bexpend\b'],
-    'id':           [r'\bid\b', r'\bno\.?$', r'_no\b', r'number', r'\bcode\b', r'\bref\b', r'application', r'registration',
-                     r'emp(loyee)?[_\s]*id', r'project[_\s]*id', r'transaction', r'invoice', r'\bcmis\b', r'\bcase\b'],
     'date':         [r'date', r'\bdob\b', r'join(ing|ed)?', r'retirement', r'completion', r'deadline', r'\bdue\b', r'tarikh', r'issued'],
     'department':   [r'department', r'\bdept\b', r'\bwing\b', r'branch', r'directorate', r'ministry', r'\bsection\b', r'\boffice\b'],
     'district':     [r'district', r'tehsil', r'zilla', r'\bcity\b', r'region', r'province', r'division', r'location', r'\barea\b'],
@@ -62,7 +65,7 @@ CATEGORICAL_ROLES = {'department', 'district', 'status', 'vendor', 'designation'
 # Helpers
 # ------------------------------------------------------------------ #
 def _matches(name, patterns):
-    low = str(name).strip().lower()
+    low = str(name).strip().lower().replace('_', ' ')
     return any(re.search(p, low) for p in patterns)
 
 
@@ -103,6 +106,9 @@ def _parse_numeric_string(val):
         return None
     # multiplier words ("2.5 million") are unreliable to convert - refuse rather than guess
     if re.search(r'\b(million|billion|crore|lakh|lac|thousand)\b', s.lower()):
+        return None
+    # alphanumeric codes like "BC-101" / "EMP-1005" must never become numbers
+    if re.search(r'[A-Za-z]\s*-\s*\d', s):
         return None
     neg = False
     m = re.fullmatch(r'\(([^()]*)\)', s)
@@ -441,10 +447,12 @@ def analyze(raw_df, options=None, context=None):
                                    'updated': 'trimmed values', 'reason': 'Whitespace clean-up (TRIM/CLEAN)',
                                    'cells': changed})
 
-    # 4c. numeric coercion of amount-like object columns
+    # 4c. numeric coercion of amount-like object columns (never ID/code columns)
+    coerced_numeric_cols = []
     for c in cleaned.columns:
         m = col_meta[c]
-        if m['is_object'] and m['role'] in ('amount', 'budget', 'expenditure'):
+        if m['is_object'] and m['role'] in ('amount', 'budget', 'expenditure') \
+                and not _matches(c, [r'\bcode\b', r'\bid\b', r'\bno\.?$', r'\bref\b', r'\bkey\b', r'\bserial\b', r'\bnumber\b']):
             new, rate = _coerce_numeric(cleaned[c])
             if rate >= 0.85 and new.notna().sum() > 0 and not _is_numeric_dtype(cleaned[c]):
                 # capture a real before/after example for the audit trail
@@ -460,6 +468,7 @@ def analyze(raw_df, options=None, context=None):
                                    'reason': 'Converted text amounts to numbers for calculation (thousands separators / currency prefixes removed)',
                                    'cells': max(converted, 1)})
                 col_meta[c]['is_numeric'] = True
+                coerced_numeric_cols.append(c)
                 cleaned[c] = new
 
     # 4d. date parsing
@@ -715,10 +724,12 @@ def analyze(raw_df, options=None, context=None):
             continue
         if main_metric and _is_numeric_dtype(cleaned[main_metric]):
             g = cleaned.groupby(d, dropna=False).agg(**{
-                'count': (d, 'size'), 'sum': (main_metric, 'sum'), 'avg': (main_metric, 'mean')})
+                'count': (d, 'size'), 'sum': (main_metric, 'sum'), 'avg': (main_metric, 'mean'),
+                'mn': (main_metric, 'min'), 'mx': (main_metric, 'max'), 'med': (main_metric, 'median')})
             g = g.sort_values('sum', ascending=False)
             total = g['sum'].sum()
             rows = [{'label': str(k), 'count': int(r['count']), 'sum': _j(r['sum']), 'avg': _j(r['avg']),
+                     'min': _j(r['mn']), 'max': _j(r['mx']), 'median': _j(r['med']),
                      'pct': _j(r['sum'] / total * 100, 1) if total else None}
                     for k, r in g.head(15).iterrows()]
             pivots.append({'dimension': d, 'measure': main_metric, 'has_measure': True, 'rows': rows,
@@ -866,6 +877,22 @@ def analyze(raw_df, options=None, context=None):
     if removed_dup:
         assumptions.append(f'{removed_dup} exact duplicate row(s) removed from Cleaned_Data on user request. Raw_Data retains every original row.')
 
+    # ---------------- 18. validation rules & power query recipe ----------------
+    validation_rules = build_validation_rules(cleaned, col_meta)
+    powerquery = generate_powerquery(cleaned, col_meta, coerced_numeric_cols, options, ctx)
+
+    # builder-friendly column lists
+    categorical_columns = []
+    for c in cleaned.columns:
+        if cleaned[c].dtype == object:
+            nun = int(cleaned[c].nunique(dropna=True))
+            if 1 <= nun <= 100:
+                categorical_columns.append({
+                    'name': c, 'unique': nun,
+                    'values': [str(v) for v in cleaned[c].value_counts(dropna=False).head(50).index.tolist()],
+                })
+    numeric_columns = [c for c in cleaned.columns if _is_numeric_dtype(cleaned[c]) and cleaned[c].notna().any()]
+
     # severity ordering
     sev_rank = {SEVERITY_CRITICAL: 0, SEVERITY_WARNING: 1, SEVERITY_INFO: 2}
     issues.sort(key=lambda x: sev_rank.get(x['severity'], 3))
@@ -882,6 +909,9 @@ def analyze(raw_df, options=None, context=None):
         'primary_date_col': primary_date_col, 'main_metric': main_metric,
         'dim_cols': dim_cols, 'n_rows': n_rows, 'n_cols': n_cols,
         'options_applied': options, 'ctx': ctx,
+        'validation_rules': validation_rules, 'powerquery': powerquery,
+        'categorical_columns': categorical_columns, 'numeric_columns': numeric_columns,
+        'coerced_numeric_cols': coerced_numeric_cols,
     }
     return result
 
@@ -920,6 +950,392 @@ def to_payload(result, job_id, filename, sheet_name, sheets_info, download_url):
         'dup_rows': result['dup_rows'],
         'id_dup': id_dup,
         'options_applied': result['options_applied'],
+        'validation_rules': result.get('validation_rules', []),
+        'powerquery': result.get('powerquery', {}),
+        'categorical_columns': result.get('categorical_columns', []),
+        'numeric_columns': result.get('numeric_columns', []),
+        'join_report': result.get('join_report'),
+        'is_merged': bool(result.get('merged_data') is not None),
     }
 
 
+
+
+# ================================================================== #
+# PIVOT BUILDER - full pivot options (rows, columns, measure, agg)
+# ================================================================== #
+AGG_FUNCS = {'sum': 'sum', 'avg': 'mean', 'mean': 'mean', 'min': 'min', 'max': 'max', 'median': 'median'}
+AGG_LABELS = {'sum': 'Sum', 'avg': 'Average', 'min': 'Minimum', 'max': 'Maximum', 'median': 'Median'}
+
+
+def build_pivot(df, row_dim, col_dim=None, measure=None, agg='sum', filter_col=None, filter_val=None):
+    """Interactive pivot: rows x optional columns, measure + aggregation, optional filter."""
+    if row_dim not in df.columns:
+        raise ValueError(f'Row field "{row_dim}" not found.')
+    if col_dim and col_dim not in df.columns:
+        raise ValueError(f'Column field "{col_dim}" not found.')
+    count_mode = measure in (None, '', '__count__')
+    if not count_mode and measure not in df.columns:
+        raise ValueError(f'Value field "{measure}" not found.')
+    if not count_mode and not _is_numeric_dtype(df[measure]):
+        raise ValueError(f'Value field "{measure}" is not numeric - choose "Record count" or a numeric column.')
+    agg = (agg or 'sum').lower()
+    if not count_mode and agg not in AGG_FUNCS:
+        raise ValueError(f'Unknown aggregation "{agg}".')
+
+    d = df
+    applied_filter = None
+    if filter_col and filter_val not in (None, '', '__all__'):
+        if filter_col not in d.columns:
+            raise ValueError(f'Filter field "{filter_col}" not found.')
+        d = d[d[filter_col].astype(str) == str(filter_val)]
+        applied_filter = {'column': filter_col, 'value': str(filter_val)}
+    if len(d) == 0:
+        raise ValueError('No records match the selected filter.')
+
+    # normalise dimension labels (blanks -> "(blank)")
+    rd = d[row_dim].fillna('(blank)').astype(str)
+    cd = d[col_dim].fillna('(blank)').astype(str) if col_dim else None
+
+    if not col_dim:
+        if count_mode:
+            g = rd.value_counts().sort_values(ascending=False)
+            total = float(g.sum())
+            rows = [{'label': str(k), 'value': int(v), 'pct': _j(v / total * 100, 1) if total else None}
+                    for k, v in g.head(60).items()]
+            return {'mode': 'single', 'row_dim': row_dim, 'col_dim': None, 'measure': None,
+                    'agg': 'count', 'rows': rows, 'grand_total': _j(total),
+                    'records': int(len(d)), 'filter': applied_filter}
+        func = AGG_FUNCS[agg]
+        tmp = pd.DataFrame({row_dim: rd, measure: d[measure].values})
+        g = tmp.groupby(row_dim)[measure].agg(func).sort_values(ascending=False)
+        total = float(g.sum()) if func == 'sum' else None
+        rows = [{'label': str(k), 'value': _j(v),
+                 'pct': _j(v / total * 100, 1) if total else None}
+                for k, v in g.head(60).items()]
+        return {'mode': 'single', 'row_dim': row_dim, 'col_dim': None, 'measure': measure,
+                'agg': agg, 'rows': rows, 'grand_total': _j(total),
+                'records': int(len(d)), 'filter': applied_filter}
+
+    # cross-tab
+    agg_func = None if count_mode else AGG_FUNCS[agg]
+    tmp = pd.DataFrame({row_dim: rd, col_dim: cd})
+    if count_mode:
+        pt = pd.crosstab(tmp[row_dim], tmp[col_dim]).astype(float)
+    else:
+        tmp[measure] = d[measure].values
+        pt = pd.pivot_table(tmp, index=row_dim, columns=col_dim, values=measure,
+                            aggfunc=agg_func, dropna=False)
+    row_tot = pt.sum(axis=1, skipna=True)
+    col_tot = pt.sum(axis=0, skipna=True)
+    grand = float(pt.sum(skipna=True).sum()) if count_mode or agg_func == 'sum' else None
+    # sort and cap
+    pt = pt.loc[row_tot.sort_values(ascending=False).index]
+    pt = pt[col_tot.sort_values(ascending=False).index]
+    pt = pt.iloc[:30, :15]
+    rt = row_tot[pt.index]
+    ct = col_tot[pt.columns]
+    return {'mode': 'cross', 'row_dim': row_dim, 'col_dim': col_dim,
+            'measure': None if count_mode else measure,
+            'agg': 'count' if count_mode else agg,
+            'row_labels': [str(i) for i in pt.index],
+            'col_labels': [str(c) for c in pt.columns],
+            'matrix': [[_j(v) for v in pt.iloc[r]] for r in range(len(pt))],
+            'row_totals': [_j(v) for v in rt],
+            'col_totals': [_j(v) for v in ct],
+            'grand_total': _j(grand) if grand is not None else None,
+            'records': int(len(d)), 'filter': applied_filter}
+
+
+# ================================================================== #
+# DATA MODELING - relationships between sheets (Excel Data Model style)
+# ================================================================== #
+def detect_relationships(sheets, max_pairs=15):
+    """Detect candidate join keys between sheets. Never merges - only reports."""
+    names = [n for n, d in sheets.items() if isinstance(d, pd.DataFrame) and d.shape[0] > 0 and d.shape[1] > 0]
+    if len(names) < 2:
+        return []
+    rels = []
+
+    def value_set(df, col, cap=20000):
+        s = df[col].dropna()
+        if len(s) == 0:
+            return set()
+        if len(s) > cap:
+            s = s.sample(cap, random_state=0)
+        return set(s.astype(str).str.strip().str.lower())
+
+    for li in range(len(names)):
+        for ri in range(len(names)):
+            if li == ri:
+                continue
+            ln, rn = names[li], names[ri]
+            left, right = sheets[ln], sheets[rn]
+            best_for_pair = []
+            for rcol in list(right.columns)[:60]:
+                rset = value_set(right, rcol)
+                if not rset or len(rset) > 5000:
+                    continue
+                for lcol in list(left.columns)[:80]:
+                    same_name = str(lcol).strip().lower() == str(rcol).strip().lower()
+                    if not same_name:
+                        # only consider differently-named columns when values actually overlap
+                        lsample = list(value_set(left, lcol, cap=400))
+                        if not lsample or not (set(lsample) & rset):
+                            continue
+                    lset = value_set(left, lcol)
+                    if not lset:
+                        continue
+                    inter = lset & rset
+                    if not inter:
+                        continue
+                    matched_left = len(inter) / len(lset)          # % of left values found in right
+                    matched_right = len(inter) / len(rset)         # % of right values used by left
+                    if matched_left < 0.3 and not same_name:
+                        continue
+                    lser = left[lcol].dropna().astype(str).str.strip().str.lower()
+                    rser = right[rcol].dropna().astype(str).str.strip().str.lower()
+                    best_for_pair.append({
+                        'left_sheet': ln, 'left_key': str(lcol),
+                        'right_sheet': rn, 'right_key': str(rcol),
+                        'left_rows': int(len(left)), 'right_rows': int(len(right)),
+                        'matched_left_pct': _j(matched_left * 100, 1),
+                        'matched_right_pct': _j(matched_right * 100, 1),
+                        'left_key_unique_pct': _j(lser.nunique() / len(lser) * 100, 1) if len(lser) else 0,
+                        'right_key_unique_pct': _j(rser.nunique() / len(rser) * 100, 1) if len(rser) else 0,
+                        'duplicate_left_keys': int(len(lser) - lser.nunique()),
+                        'duplicate_right_keys': int(len(rser) - rser.nunique()),
+                        'same_name': same_name,
+                        'matched_values': len(inter),
+                    })
+            # best candidates per sheet-pair: same-name first, then by coverage
+            best_for_pair.sort(key=lambda r: (not r['same_name'], -(r['matched_left_pct'] or 0)))
+            rels.extend(best_for_pair[:2])
+    # global sort: same-name + high coverage first, cap results
+    rels.sort(key=lambda r: (not r['same_name'], -((r['matched_left_pct'] or 0) * (r['matched_right_pct'] or 0))))
+    # dedupe identical (reversed duplicates are kept as they describe different directions)
+    seen, out = set(), []
+    for r in rels:
+        k = (r['left_sheet'], r['left_key'], r['right_sheet'], r['right_key'])
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(r)
+    return out[:max_pairs]
+
+
+def merge_sheets(sheets, left_sheet, left_key, right_sheet, right_key, how='left'):
+    """Validated merge of two sheets. Returns (merged_df, join_report)."""
+    import pandas as _pd
+    if left_sheet not in sheets or right_sheet not in sheets:
+        raise ValueError('Sheet not found.')
+    left, right = sheets[left_sheet], sheets[right_sheet]
+    if left_key not in left.columns:
+        raise ValueError(f'Key "{left_key}" not found in "{left_sheet}".')
+    if right_key not in right.columns:
+        raise ValueError(f'Key "{right_key}" not found in "{right_sheet}".')
+    if how not in ('left', 'inner'):
+        raise ValueError('Join type must be "left" or "inner".')
+
+    lkey = left[left_key].astype(str).str.strip().str.lower()
+    rkey = right[right_key].astype(str).str.strip().str.lower()
+    lblank = lkey.isin(['', 'nan', 'none', 'nat'])
+    rblank = rkey.isin(['', 'nan', 'none', 'nat'])
+    lkey = lkey.where(~lblank)
+    rkey = rkey.where(~rblank)
+    rset = set(rkey.dropna())
+    matched_mask = lkey.isin(rset)
+    dup_l = int(len(lkey.dropna()) - lkey.dropna().nunique())
+    dup_r = int(len(rkey.dropna()) - rkey.dropna().nunique())
+
+    L = left.copy()
+    L['__join_key__'] = lkey
+    R = right.copy()
+    R['__join_key__'] = rkey
+    merged = _pd.merge(L, R, on='__join_key__', how=how, suffixes=('', ' (right)'))
+    merged = merged.drop(columns=['__join_key__'])
+
+    join_report = {
+        'left_sheet': left_sheet, 'left_key': left_key,
+        'right_sheet': right_sheet, 'right_key': right_key,
+        'join_type': how,
+        'left_rows': int(len(left)), 'right_rows': int(len(right)),
+        'matched_left_rows': int(matched_mask.sum()),
+        'unmatched_left_rows': int((~matched_mask).sum()),
+        'duplicate_left_keys': dup_l, 'duplicate_right_keys': dup_r,
+        'result_rows': int(len(merged)),
+        'result_columns': int(len(merged.columns)),
+    }
+    if dup_r:
+        join_report['note'] = (f'"{right_key}" has {dup_r} duplicate value(s) in "{right_sheet}" - '
+                               'the merge will multiply matching left rows (one-to-many). Verify before official use.')
+    return merged, join_report
+
+
+# ================================================================== #
+# DATA VALIDATION - Excel entry rules generated from the actual data
+# ================================================================== #
+def build_validation_rules(cleaned, col_meta):
+    """Generate Excel-style data validation rules from observed data. Rules only - no data changed."""
+    rules = []
+    for c in cleaned.columns:
+        m = col_meta[c]
+        role = m['role']
+        if m.get('is_datetime'):
+            s = cleaned[c].dropna()
+            if len(s):
+                rules.append({'column': c, 'type': 'date',
+                              'min': str(s.min().date()), 'max': str(s.max().date()),
+                              'rule': f'Date between {s.min().date()} and {s.max().date()}',
+                              'purpose': 'Rejects mistyped / out-of-range dates at entry'})
+        elif m.get('is_numeric'):
+            s = cleaned[c].dropna()
+            if not len(s):
+                continue
+            lo, hi = float(s.min()), float(s.max())
+            if role == 'percent':
+                rules.append({'column': c, 'type': 'decimal', 'min': 0, 'max': 100,
+                              'rule': 'Decimal between 0 and 100 (percentage)',
+                              'purpose': 'Blocks out-of-range percentages (e.g. 130%)'})
+            elif role in ('amount', 'budget', 'expenditure'):
+                pad = max(abs(lo), abs(hi), 1) * 0.10
+                rules.append({'column': c, 'type': 'decimal',
+                              'min': _j(lo - pad), 'max': _j(hi + pad),
+                              'rule': f'Decimal between {_j(lo - pad):,} and {_j(hi + pad):,} (observed range ±10%)',
+                              'purpose': 'Catches mistyped amounts (extra/missing zeros, wrong decimals)'})
+            else:
+                rules.append({'column': c, 'type': 'decimal', 'min': _j(lo), 'max': _j(hi),
+                              'rule': f'Decimal between {_j(lo):,} and {_j(hi):,} (observed range)',
+                              'purpose': 'Entry must stay within the observed data range'})
+        elif cleaned[c].dtype == object:
+            s = cleaned[c].dropna()
+            if not len(s):
+                continue
+            uniq = s.astype(str).str.strip()
+            uniq = uniq[uniq != '']
+            nuniq = uniq.nunique()
+            if role in CATEGORICAL_ROLES and 1 < nuniq <= 50:
+                rules.append({'column': c, 'type': 'list',
+                              'values': sorted(uniq.unique().tolist()),
+                              'rule': f'Dropdown list - {nuniq} allowed value(s)',
+                              'purpose': 'Prevents spelling variants like "finance" / "FINANCE" / "Finance "'})
+            elif role == 'id':
+                lens = uniq.str.len()
+                if len(lens):
+                    rules.append({'column': c, 'type': 'textLength',
+                                  'min': int(lens.min()), 'max': int(lens.max()),
+                                  'rule': f'Text length between {int(lens.min())} and {int(lens.max())} characters',
+                                  'purpose': 'Catches truncated / malformed IDs'})
+    return rules
+
+
+# ================================================================== #
+# POWER QUERY - M recipe generated from the actual cleaning steps
+# ================================================================== #
+def _m_str(v):
+    return '"' + str(v).replace('"', '""') + '"'
+
+
+def generate_powerquery(cleaned, col_meta, coerced_numeric_cols, options, ctx):
+    """Generate a Power Query (M) script + Excel UI steps matching the agent's cleaning."""
+    file_name = ctx.get('file_name', 'data.xlsx')
+    sheet = ctx.get('sheet_name', 'Sheet1')
+    is_csv = file_name.lower().endswith('.csv')
+    has_dates = any(col_meta[c].get('is_datetime') for c in cleaned.columns)
+    coerced = set(coerced_numeric_cols or [])
+    std_case = options.get('standardize_case', True)
+    fill_missing = options.get('fill_missing', True)
+
+    type_pairs, trim_pairs, case_pairs, fill_pairs = [], [], [], []
+    for c in cleaned.columns:
+        m = col_meta[c]
+        if m.get('is_datetime'):
+            type_pairs.append((c, 'type date'))
+        elif m.get('is_numeric'):
+            allint = True
+            s = cleaned[c].dropna()
+            for v in (s.head(50) if len(s) else []):
+                try:
+                    if abs(float(v) - round(float(v))) > 1e-9:
+                        allint = False
+                        break
+                except (TypeError, ValueError):
+                    allint = False
+                    break
+            type_pairs.append((c, 'Int64.Type' if allint else 'type number'))
+        else:
+            type_pairs.append((c, 'type text'))
+            if c in coerced:
+                continue
+            trim_pairs.append((c, 'each Text.Clean(Text.Trim(_)), type text'))
+            if std_case and m['role'] in CATEGORICAL_ROLES:
+                case_pairs.append((c, 'each Text.Proper(Text.Trim(_)), type text'))
+            if fill_missing and m['role'] in CATEGORICAL_ROLES:
+                fill_pairs.append((c, 'each if _ = null or Text.Trim(_) = "" then "MISSING" else _'))
+
+    L = ['// =========================================================',
+         '// GovData Analytics - Power Query script (generated)',
+         f'// Source: {file_name} | Sheet: {sheet}',
+         '// Adjust the file path below to match your computer.',
+         '// =========================================================',
+         'let']
+    if is_csv:
+        L.append(f'    Source = Csv.Document(File.Contents("C:\\Data\\{_m_str(file_name)[1:-1]}"), [Delimiter=",", Encoding=65001]),')
+        L.append('    PromotedHeaders = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),')
+        prev = 'PromotedHeaders'
+    else:
+        L.append(f'    Source = Excel.Workbook(File.Contents("C:\\Data\\{_m_str(file_name)[1:-1]}"), null, true),')
+        L.append(f'    SheetData = Source{{[Item={_m_str(sheet)},Kind="Sheet"]}}[Data],')
+        L.append('    PromotedHeaders = Table.PromoteHeaders(SheetData, [PromoteAllScalars=true]),')
+        prev = 'PromotedHeaders'
+    if type_pairs:
+        pairs = ', '.join(f'{{{_m_str(c)}, {t}}}' for c, t in type_pairs)
+        locale = ', "en-GB"' if has_dates else ''  # day-first dates
+        L.append(f'    ChangedType = Table.TransformColumnTypes({prev}, {{{pairs}}}{locale}),')
+        prev = 'ChangedType'
+    for idx, col in enumerate(coerced, 1):
+        L.append('    // "{}" contained text like "Rs. 45,000" - keep digits/dot/minus only'.format(col))
+        step = 'CleanAmount{}'.format(idx)
+        line = ('    ' + step + ' = Table.TransformColumns(' + prev + ', '
+                '{{' + _m_str(col)
+                + ', each try Number.From(Text.Select(_, {"0".."9", ".", "-"})) otherwise null, type number}}'
+                + '),')
+        L.append(line)
+        prev = step
+    if trim_pairs:
+        pairs = ', '.join('{{{}, {}}}'.format(_m_str(c), f) for c, f in trim_pairs)
+        L.append('    TrimmedText = Table.TransformColumns({}, {{{}}}),'.format(prev, pairs))
+        prev = 'TrimmedText'
+    if case_pairs:
+        pairs = ', '.join('{{{}, {}}}'.format(_m_str(c), f) for c, f in case_pairs)
+        L.append('    // Standardise department / district / status spelling to Title Case')
+        L.append('    ProperCase = Table.TransformColumns({}, {{{}}}),'.format(prev, pairs))
+        prev = 'ProperCase'
+    if fill_pairs:
+        pairs = ', '.join('{{{}, {}}}'.format(_m_str(c), f) for c, f in fill_pairs)
+        L.append('    // Mark blank categories clearly instead of inventing values')
+        L.append('    FilledMissing = Table.TransformColumns({}, {{{}}}),'.format(prev, pairs))
+        prev = 'FilledMissing'
+    L.append('    // Remove exact duplicate rows (delete this line if you must keep every row)')
+    L.append(f'    RemovedDuplicates = Table.Distinct({prev})')
+    L.append('in')
+    L.append('    RemovedDuplicates')
+    m_code = '\n'.join(L)
+
+    ui_steps = [
+        f'Excel kholein → Data → Get Data → {"From Text/CSV" if is_csv else "From File → From Workbook"} → apni file select karein.',
+        f'Navigator me "{sheet}" select karein → "Transform Data" (Power Query Editor khulega).',
+        'Home → Remove Rows → Remove Blank Rows (agar blank rows hain).',
+    ]
+    if has_dates:
+        ui_steps.append('Date column select karein → data type icon → Using Locale → Date + English (United Kingdom) — day-first (dd/mm/yyyy) ke liye.')
+    if coerced:
+        ui_steps.append('Text amount columns ("Rs. 45,000" wale) select karke Transform tab se data type ko Decimal Number karein.')
+    if trim_pairs:
+        ui_steps.append('Text columns select → Transform → Format → Trim (extra spaces hat jayenge).')
+    if std_case:
+        ui_steps.append('Department/District/Status columns select → Transform → Format → Capitalize Each Word.')
+    ui_steps.append('Home → Remove Duplicates (sirf tab jab exact duplicate rows confirm ho chuke hain).')
+    ui_steps.append('Home → Close & Load To… → "PivotTable Report" — ab pivot khud banayein, ya "Table" par load karein.')
+    ui_steps.append('Refresh: Data → Refresh All (naya data aane par sirf refresh karna hota hai — formulas dobara banane ki zaroorat nahi).')
+    return {'m_code': m_code, 'ui_steps': ui_steps, 'file_name': file_name, 'sheet': sheet}

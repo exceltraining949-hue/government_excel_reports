@@ -60,6 +60,56 @@ Upload → Workbook Inspection → Data Quality Checks → Cleaning (audit-trail
 12. **Cleaned_Data** — standardized copy
 13. **Chart_Data** — dashboard charts ka backing data
 
+
+## Advanced Features (v2)
+
+### 📊 Pivot Builder (`/api/pivot`)
+PivotTable jaisa builder — aap ke data ke asli columns se:
+- **Rows** × **Columns** (cross-tab matrix with row/column totals + grand total)
+- **Values**: koi bhi numeric column ya "Record count"
+- **Aggregation**: Sum / Average / Minimum / Maximum / Median
+- **Filter**: ek categorical column par value filter
+- % of total, top 30 rows / 15 columns cap
+
+### 🔗 Data Modeling (`/api/model`, `/api/join`)
+Excel Data Model ki tarah:
+- **Detect Relationships** — multi-sheet workbooks me common keys (same-name + value-overlap detection)
+- Har candidate ki report: match %, key uniqueness, duplicate keys
+- **Validated Merge (Left/Inner join)** — merge se pehle matched/unmatched counts, phir poora analysis merged data par
+- Merged job ka apna Excel report hota hai (`Merged_Data` sheet ke saath)
+- Rule: kabhi blind merge nahi — pehle validation report, phir join
+
+### ⚡ Power Query Generator
+Har upload ke liye M code script jo **asli columns aur asli detected issues** se banti hai:
+- Types (dates day-first "en-GB" locale ke saath), trim/clean, Title Case, "Rs. 45,000" → number, MISSING fill, duplicate removal (optional line)
+- Copy button + manual Excel UI steps + Advanced Editor paste instructions
+- Excel report me `Power_Query` sheet
+
+### ✅ Data Validation
+Asli data se generate hui rules jo **Cleaned_Data sheet me actually apply** hoti hain:
+- **Dropdown lists** (department/district/status allowed values — Validation_Rules sheet se referenced)
+- **Decimal ranges** (amounts: observed ±10%, percentages 0–100)
+- **Date ranges**, **text length** (IDs)
+- Data + 300 future rows par apply — galat entry par Excel reject karega
+
+### Report sheets (17 tak)
+Read_Me, Dashboard, Summary, Pivot_Analysis (min/max/median samet), Data_Dictionary,
+Rankings, Exception_Report, Validation_Rules, Power_Query, Data_Quality, Change_Log,
+Assumptions, Calculations, Merged_Data (join par), Raw_Data, Cleaned_Data (validations ke saath), Chart_Data
+
+### Data-integrity guards (v2 me strengthened)
+- `Budget_Code` jaise alphanumeric codes (`BC-101`, `EMP-1005`) kabhi numbers nahi bante
+- ID/code columns (`code`, `id`, `key`...) numeric coercion se excluded
+- `Utilization %` jaisi columns percent role me (expenditure nahi)
+- Multiplier words ("2.5 million") reject — chupke se galat value nahi
+
+### New API endpoints
+| Endpoint | Kaam |
+|---|---|
+| `POST /api/pivot` | Pivot builder (rows/cols/measure/agg/filter) |
+| `POST /api/model` | Sheet relationships detection |
+| `POST /api/join` | Validated merge + full analysis |
+
 ## Files
 
 ```

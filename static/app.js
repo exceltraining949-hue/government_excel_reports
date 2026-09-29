@@ -26,6 +26,7 @@ const I18N = {
     fmtFull: "Full",
     tabQuality: "Data Quality", tabSummary: "Summary & Pivots", tabRank: "Top / Bottom 50",
     tabExc: "Exceptions", tabChanges: "Change Log", tabAssume: "Assumptions", tabCols: "Columns",
+    tabPivot: "Pivot Builder", tabModel: "Data Model", tabValid: "Validation", tabPQ: "Power Query",
     footer1: "🔐 Your file stays confidential — analysis happens only on this server, nothing is sent elsewhere.",
     footer2: "GovData Analytics Portal · Automated Excel analysis for government offices · No data is fabricated — every figure is computed from the uploaded file."
   },
@@ -52,6 +53,7 @@ const I18N = {
     fmtFull: "مکمل",
     tabQuality: "ڈیٹا کوالٹی", tabSummary: "خلاصہ و تجزیہ", tabRank: "ٹاپ / بٹم 50",
     tabExc: "استثنائات", tabChanges: "تبدیلی رپورٹ", tabAssume: "مفروضات", tabCols: "کالم",
+    tabPivot: "پیوٹ بلڈر", tabModel: "ڈیٹا ماڈل", tabValid: "ویلیڈیشن", tabPQ: "پاور کوری",
     footer1: "🔐 آپ کی فائل رازدارانہ ہے — تجزیہ صرف اسی سرور پر ہوتا ہے۔",
     footer2: "گوو ڈیٹا اینالیٹکس پورٹل · حکومتی دفاتر کے لیے خودکار ایکسل تجزیہ · کوئی ڈیٹا گھڑا نہیں جاتا۔"
   }
@@ -415,6 +417,10 @@ function renderTab(tab) {
   else if (tab === "changes") body.innerHTML = tabChanges(p);
   else if (tab === "assume") body.innerHTML = tabAssume(p);
   else if (tab === "columns") body.innerHTML = tabColumns(p);
+  else if (tab === "pivot") { body.innerHTML = tabPivotBuilder(p); wirePivotBuilder(); }
+  else if (tab === "model") { body.innerHTML = tabModel(p); wireModel(); }
+  else if (tab === "valid") body.innerHTML = tabValidation(p);
+  else if (tab === "pq") { body.innerHTML = tabPowerQuery(p); wirePowerQuery(); }
 }
 
 function sevBadge(s) {
@@ -461,8 +467,9 @@ function tabSummary(p) {
     html += `<div class="section-h">📌 ${esc(pv.dimension)}-wise summary${pv.has_measure ? ` — ${esc(pv.measure)}` : ""}</div>`;
     if (pv.has_measure) {
       html += tableHTML(
-        [{ label: pv.dimension }, { label: "Records", num: true }, { label: "Sum", num: true }, { label: "Average", num: true }, { label: "Share %", num: true }],
-        pv.rows.map(r => [esc(r.label), r.count.toLocaleString(), fmtNum(r.sum), fmtNum(r.avg), fmtPct(r.pct)])
+        [{ label: pv.dimension }, { label: "Records", num: true }, { label: "Sum", num: true }, { label: "Average", num: true },
+         { label: "Min", num: true }, { label: "Max", num: true }, { label: "Median", num: true }, { label: "Share %", num: true }],
+        pv.rows.map(r => [esc(r.label), r.count.toLocaleString(), fmtNum(r.sum), fmtNum(r.avg), fmtNum(r.min), fmtNum(r.max), fmtNum(r.median), fmtPct(r.pct)])
       );
     } else {
       html += tableHTML(
@@ -540,6 +547,279 @@ function tabColumns(p) {
       c.missing.toLocaleString(), fmtPct(c.missing_pct),
       c.sample && c.sample.length ? c.sample.map(esc).join(", ") : (c.min != null ? `${fmtNum(c.min)} … ${fmtNum(c.max)}` : "—")])
   );
+}
+
+/* ================= PIVOT BUILDER ================= */
+let PIVOT_STATE = { row: null, col: "", measure: "__count__", agg: "sum", filter_col: "", filter_val: "" };
+
+function tabPivotBuilder(p) {
+  const cats = p.categorical_columns || [];
+  const nums = p.numeric_columns || [];
+  if (!cats.length) return '<div class="empty">Pivot not possible — no categorical column detected in this data.</div>';
+  PIVOT_STATE.row = PIVOT_STATE.row && cats.some(c => c.name === PIVOT_STATE.row) ? PIVOT_STATE.row : cats[0].name;
+  const opt = (v, l, sel) => `<option value="${esc(v)}"${sel === v ? " selected" : ""}>${esc(l)}</option>`;
+  return `
+  <p class="muted small">PivotTable jaisa builder — Rows, Columns, Values, Aggregation aur Filter sab aap ke data ke asli columns se. Excel ke PivotTable options ke mutabiq.</p>
+  <div class="builder">
+    <div class="builder-grid">
+      <div class="builder-field"><label>Rows</label>
+        <select id="pvRow">${cats.map(c => opt(c.name, c.name, PIVOT_STATE.row)).join("")}</select></div>
+      <div class="builder-field"><label>Columns (optional)</label>
+        <select id="pvCol"><option value="">— none —</option>${cats.map(c => opt(c.name, c.name, PIVOT_STATE.col)).join("")}</select></div>
+      <div class="builder-field"><label>Values</label>
+        <select id="pvVal"><option value="__count__">Record count</option>${nums.map(c => opt(c, c, PIVOT_STATE.measure)).join("")}</select></div>
+      <div class="builder-field"><label>Aggregation</label>
+        <select id="pvAgg">${["sum", "avg", "min", "max", "median"].map(a => opt(a, { sum: "Sum", avg: "Average", min: "Minimum", max: "Maximum", median: "Median" }[a], PIVOT_STATE.agg)).join("")}</select></div>
+      <div class="builder-field"><label>Filter (optional)</label>
+        <select id="pvFCol"><option value="">— none —</option>${cats.map(c => opt(c.name, c.name, PIVOT_STATE.filter_col)).join("")}</select></div>
+      <div class="builder-field"><label>Filter value</label>
+        <select id="pvFVal"><option value="">— all —</option></select></div>
+      <button class="btn btn-primary" id="pvBuild">📊 Build Pivot</button>
+    </div>
+  </div>
+  <div id="pvResult">${PIVOT_LAST ? renderPivotResult(PIVOT_LAST) : '<div class="empty">Fields chunein aur "Build Pivot" dabaein.</div>'}</div>`;
+}
+
+let PIVOT_LAST = null;
+
+function wirePivotBuilder() {
+  const p = PAYLOAD;
+  const cats = p.categorical_columns || [];
+  const fillVals = () => {
+    const fc = $("pvFCol").value;
+    const fv = $("pvFVal");
+    const col = cats.find(c => c.name === fc);
+    fv.innerHTML = '<option value="">— all —</option>' + (col ? col.values.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join("") : "");
+  };
+  fillVals();
+  $("pvFCol").addEventListener("change", fillVals);
+  $("pvVal").addEventListener("change", () => { $("pvAgg").disabled = $("pvVal").value === "__count__"; });
+  $("pvAgg").disabled = $("pvVal").value === "__count__";
+  $("pvBuild").addEventListener("click", async () => {
+    const btn = $("pvBuild");
+    btn.disabled = true; btn.textContent = "Building…";
+    try {
+      const res = await fetch("/api/pivot", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_id: PAYLOAD.job_id, sheet: PAYLOAD.sheet_name,
+          row: $("pvRow").value, col: $("pvCol").value,
+          measure: $("pvVal").value === "__count__" ? null : $("pvVal").value,
+          agg: $("pvAgg").value,
+          filter_col: $("pvFCol").value || null,
+          filter_val: ($("pvFCol").value && $("pvFVal").value) ? $("pvFVal").value : null,
+        })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Pivot failed.");
+      PIVOT_LAST = data.pivot;
+      PIVOT_STATE = { row: $("pvRow").value, col: $("pvCol").value, measure: $("pvVal").value, agg: $("pvAgg").value, filter_col: $("pvFCol").value, filter_val: $("pvFVal").value };
+      $("pvResult").innerHTML = renderPivotResult(PIVOT_LAST);
+    } catch (err) {
+      $("pvResult").innerHTML = `<div class="alert alert-error">⚠ ${esc(err.message)}</div>`;
+    } finally {
+      btn.disabled = false; btn.textContent = "📊 Build Pivot";
+    }
+  });
+}
+
+function renderPivotResult(pv) {
+  const mLabel = pv.measure ? `${pv.agg === "count" ? "Count" : pv.agg} of ${esc(pv.measure)}` : "Record count";
+  const fNote = pv.filter ? ` · filter: ${esc(pv.filter.column)} = ${esc(pv.filter.value)}` : "";
+  let html = `<div class="section-h">📊 ${esc(pv.row_dim)}${pv.col_dim ? " × " + esc(pv.col_dim) : ""} — ${mLabel}${fNote} <span class="muted small">(${pv.records.toLocaleString()} records)</span></div>`;
+  if (pv.mode === "single") {
+    const hasPct = pv.rows.some(r => r.pct != null);
+    const headers = [{ label: pv.row_dim }].concat([{ label: mLabel, num: true }])
+      .concat(hasPct ? [{ label: "% of total", num: true }] : []);
+    const rows = pv.rows.map(r => [esc(r.label), fmtNum(r.value)].concat(hasPct ? [fmtPct(r.pct)] : []));
+    html += tableHTML(headers, rows);
+    if (pv.grand_total != null) html += `<p class="muted small">Grand total: <b>${fmtNum(pv.grand_total)}</b></p>`;
+  } else {
+    const headers = [{ label: pv.row_dim + " \\ " + pv.col_dim }].concat(pv.col_labels.map(l => ({ label: l, num: true }))).concat([{ label: "Total", num: true }]);
+    const rows = pv.row_labels.map((rl, i) => {
+      const cells = pv.matrix[i].map(v => v == null ? "—" : fmtNum(v));
+      const tot = pv.row_totals[i];
+      return [esc(rl)].concat(cells).concat([tot == null ? "—" : fmtNum(tot)]);
+    });
+    const trow = ["<b>Column total</b>"].concat(pv.col_totals.map(v => v == null ? "—" : `<b>${fmtNum(v)}</b>`))
+      .concat(pv.grand_total != null ? [`<b>${fmtNum(pv.grand_total)}</b>`] : ["—"]);
+    html += tableHTML(headers, rows.concat([trow]));
+  }
+  html += `<p class="muted small">Note: ye calculation hai — values uploaded file se compute hui hain, kuch invent nahi hua. Top 30 rows / 15 columns tak display.</p>`;
+  return html;
+}
+
+/* ================= DATA MODEL ================= */
+let MODEL_RELS = null;
+
+function tabModel(p) {
+  let html = "";
+  if (p.join_report) {
+    const j = p.join_report;
+    html += `<div class="join-banner">
+      <b>🔗 Merged dataset active</b> — "${esc(j.left_sheet)}" [${esc(j.left_key)}] + "${esc(j.right_sheet)}" [${esc(j.right_key)}] · ${esc(j.join_type).toUpperCase()} join ·
+      ${j.matched_left_rows.toLocaleString()}/${j.left_rows.toLocaleString()} left rows matched · ${j.unmatched_left_rows.toLocaleString()} unmatched (blank rakhi gayi) ·
+      result: ${j.result_rows.toLocaleString()} rows × ${j.result_columns} columns${j.note ? `<br>⚠ ${esc(j.note)}` : ""}
+    </div>`;
+    html += `<p class="muted small">Excel report me "Merged_Data" sheet hai. Original workbook par wapas jane ke liye dobara file upload karein.</p>`;
+  }
+  const multi = (p.sheets_info || []).filter(s => s.rows > 0).length > 1;
+  if (multi && !p.join_report) {
+    html += `<div class="section-h">🔗 Sheet Relationships (Data Model)</div>
+      <p class="muted small">Excel ke Data Model ki tarah — sheets ke darmiyan common keys detect karta hai, phir VALIDATED merge (join) karta hai. Merge se pehle matching, duplicates aur unmatched counts report hote hain.</p>
+      <button class="btn btn-primary" id="dmDetect">🔍 Detect Relationships</button>
+      <div id="dmResult"></div>`;
+  } else if (!p.join_report) {
+    html += `<div class="section-h">🔗 Data Model</div>
+      <p class="muted small">Is workbook me ek hi data sheet hai, is liye sheet-to-sheet relationships possible nahi. Neeche data dictionary aur structure hai. Multi-sheet workbook upload karein to relationship detection + merge (join) khul jayega.</p>`;
+  }
+  // structure summary
+  const idCol = (p.columns || []).find(c => c.role === "id");
+  html += `<div class="section-h">🧩 Structure</div>`;
+  const struct = [];
+  if (idCol) {
+    const uniqPct = idCol.unique / Math.max(p.kpis.total_records, 1) * 100;
+    struct.push(["Primary key candidate", `"${esc(idCol.name)}" — ${idCol.unique.toLocaleString()} unique values (${uniqPct.toFixed(1)}% of rows)${uniqPct < 95 ? " — duplicates found, review required" : ""}`]);
+  } else struct.push(["Primary key candidate", "No ID-like column detected"]);
+  if (p.kpis.main_metric) struct.push(["Main measure", esc(p.kpis.main_metric)]);
+  if (p.date_range) struct.push(["Reference date column", `${p.trend ? esc(p.trend.date_col) : "—"} (${p.date_range[0]} to ${p.date_range[1]})`]);
+  if (p.kpis.utilization != null) struct.push(["Budget relationship", `Budget ↔ Expenditure columns linked (utilisation ${fmtPct(p.kpis.utilization)})`]);
+  struct.push(["Categorical (dimension) fields", (p.categorical_columns || []).map(c => esc(c.name)).join(", ") || "—"]);
+  struct.push(["Numeric (measure) fields", (p.numeric_columns || []).map(esc).join(", ") || "—"]);
+  html += tableHTML([{ label: "Aspect" }, { label: "Detail" }], struct);
+  html += `<div class="section-h">📖 Data Dictionary</div>` + tableHTML(
+    [{ label: "Column" }, { label: "Role" }, { label: "Type" }, { label: "Unique", num: true }, { label: "Missing", num: true }, { label: "Sample / range" }],
+    (p.columns || []).map(c => [esc(c.name), esc(c.role), esc(c.dtype), c.unique.toLocaleString(), c.missing.toLocaleString(),
+      c.sample && c.sample.length ? c.sample.slice(0, 2).map(esc).join(", ") : (c.min != null ? `${fmtNum(c.min)} … ${fmtNum(c.max)}` : "—")]));
+  return html;
+}
+
+function wireModel() {
+  const btn = $("dmDetect");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    btn.disabled = true; btn.textContent = "Detecting…";
+    try {
+      const res = await fetch("/api/model", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: PAYLOAD.job_id })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Detection failed.");
+      MODEL_RELS = data.relationships;
+      $("dmResult").innerHTML = renderRels(MODEL_RELS);
+      wireJoinButtons();
+    } catch (err) {
+      $("dmResult").innerHTML = `<div class="alert alert-error">⚠ ${esc(err.message)}</div>`;
+    } finally {
+      btn.disabled = false; btn.textContent = "🔍 Detect Relationships";
+    }
+  });
+}
+
+function renderRels(rels) {
+  if (!rels || !rels.length) return `<div class="empty">Koi common key relationship detect nahi hui. Sheets me shared values wale columns nahi mile (ya bohat kam overlap hai).</div>`;
+  const rows = rels.map((r, i) => [
+    `${esc(r.left_sheet)}<br><span class="muted small">${r.left_rows.toLocaleString()} rows</span>`,
+    `<b>${esc(r.left_key)}</b>`,
+    `${esc(r.right_sheet)}<br><span class="muted small">${r.right_rows.toLocaleString()} rows</span>`,
+    `<b>${esc(r.right_key)}</b>`,
+    r.matched_left_pct != null ? fmtPct(r.matched_left_pct) : "—",
+    r.duplicate_right_keys ? `<span class="badge warn">${r.duplicate_right_keys} dup</span>` : '<span class="badge info">unique</span>',
+    `<div style="display:flex;gap:6px;align-items:center">
+       <select class="join-how" data-i="${i}"><option value="left">Left join</option><option value="inner">Inner join</option></select>
+       <button class="btn btn-primary join-btn" data-i="${i}" style="padding:6px 12px;font-size:.8rem">Merge & Analyze</button>
+     </div>`
+  ]);
+  return `<p class="muted small">"Match %" = kitne left values right sheet me mile. "Unique" = right key duplicate-free hai ya nahi (one-to-many hoga to rows multiply hoti hain — report me note hoga).</p>` +
+    tableHTML([{ label: "Fact sheet" }, { label: "Left key" }, { label: "Lookup sheet" }, { label: "Right key" }, { label: "Match %", num: true }, { label: "Right key" }, { label: "Action" }], rows);
+}
+
+function wireJoinButtons() {
+  document.querySelectorAll(".join-btn").forEach(b => b.addEventListener("click", async () => {
+    const i = +b.dataset.i;
+    const rel = MODEL_RELS[i];
+    const how = document.querySelector(`.join-how[data-i="${i}"]`).value;
+    b.disabled = true; b.textContent = "Merging…";
+    try {
+      const res = await fetch("/api/join", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_id: PAYLOAD.job_id,
+          left_sheet: rel.left_sheet, left_key: rel.left_key,
+          right_sheet: rel.right_sheet, right_key: rel.right_key,
+          how,
+          standardize_case: $("optStandardize").checked,
+          fill_missing: $("optFill").checked,
+          remove_duplicates: $("optDedup").checked,
+        })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Merge failed.");
+      PAYLOAD = data;
+      PIVOT_LAST = null; PIVOT_STATE.row = null;
+      renderResults();
+      agentSay(`Merge mukammal: ${data.join_report.result_rows.toLocaleString()} rows × ${data.join_report.result_columns} columns. Ab poora analysis merged data par chal raha hai — Excel report me "Merged_Data" sheet bhi hai.`);
+    } catch (err) {
+      alert("Merge failed: " + err.message);
+      b.disabled = false; b.textContent = "Merge & Analyze";
+    }
+  }));
+}
+
+/* ================= VALIDATION ================= */
+function tabValidation(p) {
+  const rules = p.validation_rules || [];
+  if (!rules.length) return '<div class="empty">No validation rules could be generated for this data.</div>';
+  const rows = rules.map(r => {
+    let detail = esc(r.rule);
+    if (r.type === "list" && r.values) detail += `<br><span class="muted small">${r.values.slice(0, 8).map(esc).join(" · ")}${r.values.length > 8 ? " …" : ""}</span>`;
+    return [`<span class="badge info">${esc(r.type)}</span>`, esc(r.column), detail, esc(r.purpose)];
+  });
+  return `
+  <p class="muted small">Ye rules aap ke data ke asli values se generate hui hain aur <b>Cleaned_Data sheet me actually apply</b> ho chuki hain (dropdowns + range checks, data ke neeche 300 future rows par bhi). Naya entry galat ho to Excel reject karega.</p>
+  ${tableHTML([{ label: "Type" }, { label: "Column" }, { label: "Rule" }, { label: "Purpose" }], rows)}
+  <p class="muted small">Excel me khud dekhne ke liye: Cleaned_Data sheet → column select → Data → Data Validation. Dropdown lists "Validation_Rules" sheet se refer hoti hain (unhe delete na karein).</p>`;
+}
+
+/* ================= POWER QUERY ================= */
+function tabPowerQuery(p) {
+  const pq = p.powerquery || {};
+  const m = pq.m_code || "-- Not available for this dataset.";
+  const steps = pq.ui_steps || [];
+  return `
+  <p class="muted small">Power Query = refreshable cleaning pipeline. Ye script aap ke file ke <b>asli columns aur asli issues</b> se generate hui hai — same steps jo agent ne kiye. Ek dafa load karein, phir har mahine sirf <b>Refresh</b> dabaein.</p>
+  <div class="cmd-row" style="margin:0 0 10px">
+    <button class="btn btn-secondary" id="pqCopy">📋 Copy M Code</button>
+    <span class="muted small" id="pqCopyMsg"></span>
+  </div>
+  <div class="pq-code" id="pqCode">${esc(m)}</div>
+  <div class="section-h">🪜 Excel Steps (manual route)</div>
+  <ol class="steps-list">${steps.map(s => `<li>${esc(s)}</li>`).join("")}</ol>
+  <div class="section-h">🧭 Advanced Editor me paste kaise karein</div>
+  <ol class="steps-list">
+    <li>Data → Get Data → Launch Power Query Editor</li>
+    <li>Home → Advanced Editor</li>
+    <li>Poora code replace kar ke upar wala M code paste karein</li>
+    <li>Done — file path (C:\\Data\\...) apne computer ke mutabiq badlein</li>
+  </ol>`;
+}
+
+function wirePowerQuery() {
+  const btn = $("pqCopy");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    const code = PAYLOAD.powerquery ? PAYLOAD.powerquery.m_code : "";
+    let ok = false;
+    try { await navigator.clipboard.writeText(code); ok = true; } catch (e) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = code; document.body.appendChild(ta); ta.select();
+        ok = document.execCommand("copy"); document.body.removeChild(ta);
+      } catch (e2) { ok = false; }
+    }
+    $("pqCopyMsg").textContent = ok ? "✓ Copy ho gaya — Power Query Advanced Editor me paste karein" : "Copy nahi hua — code select kar ke Ctrl+C karein";
+  });
 }
 
 /* ---------------- number format bar ---------------- */
@@ -666,5 +946,29 @@ function runCommand() {
     agentSay(p.budget ? `Utilization ${fmtPct(p.budget.utilization)} (expenditure ${fmtNum(p.budget.total_expenditure)} ÷ budget ${fmtNum(p.budget.total_budget)}).` : "Utilization calculate nahi ho sakti — budget/expenditure columns missing hain.");
     return;
   }
-  agentSay('Ye command samajh nahi aayi. Yehi try karein: <b>"top 10"</b>, <b>"department wise summary"</b>, <b>"duplicates dikhao"</b>, <b>"missing values"</b>, <b>"outliers"</b>, <b>"monthly trend"</b>, <b>"million me dikhao"</b>, <b>"budget vs expenditure"</b>, <b>"summary"</b>.');
+  // pivot builder
+  if (/(pivot|peevo|cross tab|crosstab|matrix)/.test(raw)) {
+    activateTab("pivot");
+    agentSay("Pivot Builder khol diya — Rows, Columns, Values, Aggregation (Sum/Average/Min/Max/Median) aur Filter sab options aap ke data ke asli columns se chunein.");
+    return;
+  }
+  // data model
+  if (/(data model|model|relationship|rishta|join|merge|milao|jor)/.test(raw)) {
+    activateTab("model");
+    agentSay("Data Model tab khol diya — multi-sheet workbook me 'Detect Relationships' se common keys milengi, phir validated merge (join) ho sakta hai. Single-sheet me data dictionary dikhta hai.");
+    return;
+  }
+  // power query
+  if (/(power query|powerquery|pq\b|m code|m code|refresh)/.test(raw)) {
+    activateTab("pq");
+    agentSay("Power Query script khol di — aap ke file ke asli columns se bani hui M code. Copy kar ke Power Query → Advanced Editor me paste karein, phir sirf Refresh All chahiye hota hai.");
+    return;
+  }
+  // validation
+  if (/(validation|valid|rule|qaida|dro?p ?down|check)/.test(raw)) {
+    activateTab("valid");
+    agentSay(`Validation rules khol di — ${PAYLOAD.validation_rules ? PAYLOAD.validation_rules.length : 0} rules aap ke data se generate hui hain aur Excel report ki Cleaned_Data sheet me actually apply ho chuki hain (dropdowns + range checks).`);
+    return;
+  }
+  agentSay('Ye command samajh nahi aayi. Yehi try karein: <b>"top 10"</b>, <b>"department wise summary"</b>, <b>"pivot banao"</b>, <b>"data model"</b>, <b>"power query"</b>, <b>"validation rules"</b>, <b>"duplicates dikhao"</b>, <b>"missing values"</b>, <b>"outliers"</b>, <b>"monthly trend"</b>, <b>"million me dikhao"</b>, <b>"budget vs expenditure"</b>, <b>"summary"</b>.');
 }

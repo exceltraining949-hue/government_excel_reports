@@ -235,3 +235,30 @@ table.data td.num, table.data th.num { text-align: right; font-variant-numeric: 
   .cmd-row { flex-direction: column; }
   .step-label { display: none; }
 }
+
+/* ---------- pivot builder / data model ---------- */
+.builder {
+  background: #F7FAF8; border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px; margin-bottom: 16px;
+}
+.builder-grid { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+.builder-field { display: flex; flex-direction: column; gap: 4px; }
+.builder-field label { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+.builder-field select {
+  padding: 9px 12px; border: 1.5px solid var(--line); border-radius: 8px; background: #fff;
+  font-size: .88rem; min-width: 170px;
+}
+.builder-field select:focus { outline: none; border-color: var(--gold); }
+.pq-code {
+  background: #0B241B; color: #D8EFE3; font-family: Consolas, "Courier New", monospace;
+  font-size: .78rem; line-height: 1.5; padding: 16px; border-radius: 10px;
+  overflow-x: auto; white-space: pre; max-height: 420px;
+}
+.steps-list { padding-left: 22px; }
+.steps-list li { margin: 8px 0; }
+.join-banner {
+  background: var(--green-100); border: 1px solid #BFDCCE; border-left: 5px solid var(--gold);
+  border-radius: 10px; padding: 12px 16px; margin: 12px 0; font-size: .88rem;
+}
+.muted-box { color: var(--muted); font-size: .85rem; }
+table.data td.subtotal { font-weight: 700; background: #EFF5F1; }

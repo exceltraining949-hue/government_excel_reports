@@ -200,15 +200,19 @@ def build_report(result, out_path):
     contents = [
         ('Dashboard', 'Key performance indicators and charts (management view).'),
         ('Summary', 'Descriptive statistics, budget position, status distribution.'),
-        ('Pivot_Analysis', 'Dimension-wise summaries (department / district / status etc.).'),
+        ('Pivot_Analysis', 'Dimension-wise summaries: count, sum, average, min, max, median, share %.'),
+        ('Data_Dictionary', 'Data model: every column with its detected role, type and notes.'),
         ('Rankings', 'Top 50 and Bottom 50 records by the main measure.'),
         ('Exception_Report', 'Duplicates, statistical anomalies, above-budget records.'),
+        ('Validation_Rules', 'Data-validation rules + dropdown value lists (applied in Cleaned_Data).'),
+        ('Power_Query', 'Refreshable Power Query (M) script + manual Excel steps.'),
         ('Data_Quality', 'Every data-quality issue detected, with severity.'),
         ('Change_Log', 'Audit trail of every change made during cleaning.'),
         ('Assumptions', 'Interpretation assumptions, stated explicitly.'),
         ('Calculations', 'Row-level flags: rank, duplicates, outliers, missing counts.'),
+        ('Merged_Data', 'Present only when a sheet join was performed (Data Model feature).'),
         ('Raw_Data', 'Your original data, exactly as uploaded (unmodified).'),
-        ('Cleaned_Data', 'Standardised copy (trimmed text, unified case, parsed dates).'),
+        ('Cleaned_Data', 'Standardised copy (trimmed text, unified case, parsed dates) with data validation.'),
         ('Chart_Data', 'Backing data used by dashboard charts.'),
     ]
     for name, desc in contents:
@@ -429,12 +433,12 @@ def build_report(result, out_path):
     r = _sheet_title(ws, 'PIVOT-STYLE SUMMARIES', 'Group-wise aggregation of the cleaned data', span=8)
     for p in result['pivots']:
         ws.cell(row=r, column=1, value=f"{p['dimension'].upper()} - " +
-                 (f"Sum / average of {p['measure']}" if p['has_measure'] else 'Record counts')).font = Font(bold=True, size=12, color='FFFFFF')
+                 (f"Sum / average / min / max / median of {p['measure']}" if p['has_measure'] else 'Record counts')).font = Font(bold=True, size=12, color='FFFFFF')
         ws.cell(row=r, column=1).fill = SEC_FILL
-        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=5)
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=8)
         r += 1
         pdf = _pivot_df(p)
-        r = _write_table(ws, pdf, r, number_cols={'Sum', 'Average'}, pct_cols={'Share %'})
+        r = _write_table(ws, pdf, r, number_cols={'Sum', 'Average', 'Min', 'Max', 'Median'}, pct_cols={'Share %'})
         r += 1
     _autofit(ws)
 
@@ -546,6 +550,91 @@ def build_report(result, out_path):
         r += 1
     ws.column_dimensions['B'].width = 100
 
+    # ---------------- Data_Dictionary (data model) ---------------- #
+    ws = wb.create_sheet('Data_Dictionary')
+    r = _sheet_title(ws, 'DATA DICTIONARY / DATA MODEL', 'Auto-detected structure of the analysed sheet', span=8)
+    idc = next((c for c in result['col_meta'] if result['col_meta'][c]['role'] == 'id'), None)
+    dd_rows = []
+    for c in raw.columns:
+        meta = result['col_meta'].get(c, {})
+        prof = next((p for p in result['columns_profile'] if p['name'] == c), {})
+        notes = []
+        if idc == c:
+            uniq_pct = (prof.get('unique', 0) / max(len(raw), 1)) * 100
+            notes.append('Primary key candidate' if uniq_pct >= 95 else 'Key field - duplicates found')
+        if c == result.get('main_metric'):
+            notes.append('Main measure for rankings/summaries')
+        if result.get('primary_date_col') == c:
+            notes.append('Reference date column')
+        if result.get('budget') and c in (result['budget']['budget_col'], result['budget']['expenditure_col']):
+            notes.append('Used in budget analysis')
+        dd_rows.append({
+            'Column': c, 'Detected role': meta.get('role', ''), 'Data type': meta.get('dtype', ''),
+            'Unique values': prof.get('unique'), 'Missing': prof.get('missing'),
+            'Missing %': prof.get('missing_pct'),
+            'Sample / range': ', '.join(prof.get('sample', [])[:3]) if prof.get('sample')
+                               else (f"{prof.get('min')} … {prof.get('max')}" if prof.get('min') is not None else '—'),
+            'Notes': '; '.join(notes) if notes else '',
+        })
+    import pandas as _pd
+    ddf = _pd.DataFrame(dd_rows)
+    r = _write_table(ws, ddf, r, number_cols={'Unique values', 'Missing', 'Missing %'})
+    _autofit(ws)
+
+    # ---------------- Validation_Rules ---------------- #
+    ws = wb.create_sheet('Validation_Rules')
+    r = _sheet_title(ws, 'DATA VALIDATION RULES', 'Generated from the actual data - applied as dropdowns/range checks in Cleaned_Data (rows below the data too)', span=6)
+    rules = result.get('validation_rules', [])
+    list_src_cells = {}
+    if rules:
+        vdf = _pd.DataFrame([{
+            'Column': x['column'], 'Rule type': x['type'], 'Rule': x['rule'],
+            'Purpose': x['purpose'],
+        } for x in rules])
+        r = _write_table(ws, vdf, r)
+        # allowed-value lists (referenced by the dropdown validations)
+        list_rules = [x for x in rules if x['type'] == 'list']
+        if list_rules:
+            lr = r + 1
+            ws.cell(row=lr, column=1, value='ALLOWED VALUES (dropdown sources - do not delete)').font = Font(bold=True, size=11, color=NAVY)
+            lr += 1
+            list_src_cells = {}
+            for j, x in enumerate(list_rules):
+                col = get_column_letter(1 + j)
+                hc = ws.cell(row=lr, column=1 + j, value=x['column'])
+                hc.font = H_FONT
+                hc.fill = H_FILL
+                hc.border = BORDER
+                for i, v in enumerate(x.get('values', [])[:250]):
+                    ws.cell(row=lr + 1 + i, column=1 + j, value=v).border = BORDER
+                nvals = min(len(x.get('values', [])), 250)
+                list_src_cells[x['column']] = f"Validation_Rules!${col}${lr + 1}:${col}${lr + nvals}"
+                ws.column_dimensions[col].width = 24
+    else:
+        ws.cell(row=r, column=1, value='No validation rules could be generated for this data.')
+    _autofit(ws)
+
+    # ---------------- Power_Query ---------------- #
+    ws = wb.create_sheet('Power_Query')
+    r = _sheet_title(ws, 'POWER QUERY SCRIPT (M CODE)', 'Refreshable cleaning recipe matching this analysis - paste into Power Query Advanced Editor', span=6)
+    pq = result.get('powerquery') or {}
+    m_lines = (pq.get('m_code') or 'Not available for this dataset.').splitlines()
+    mono = Font(name='Consolas', size=10)
+    for i, line in enumerate(m_lines):
+        c = ws.cell(row=r + i, column=1, value=line)
+        c.font = mono
+        c.alignment = Alignment(vertical='top')
+    r += len(m_lines) + 2
+    ws.cell(row=r, column=1, value='EXCEL STEPS (manual route)').font = Font(bold=True, size=12, color=NAVY)
+    r += 1
+    for i, step in enumerate(pq.get('ui_steps', []), 1):
+        ws.cell(row=r, column=1, value=f'{i}. {step}').alignment = Alignment(wrap_text=True, vertical='top')
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=8)
+        ws.row_dimensions[r].height = 18
+        r += 1
+    ws.column_dimensions['A'].width = 110
+    ws.sheet_view.showGridLines = False
+
     # ---------------- Calculations ---------------- #
     ws = wb.create_sheet('Calculations')
     _sheet_title(ws, 'ROW-LEVEL CALCULATIONS', 'Rank, duplicate flag, outlier flag and missing-field count per record', span=8)
@@ -564,16 +653,71 @@ def build_report(result, out_path):
 
     # ---------------- Cleaned_Data ---------------- #
     ws = wb.create_sheet('Cleaned_Data')
-    _sheet_title(ws, 'CLEANED DATA', 'Standardised copy: trimmed text, unified case, parsed dates, MISSING markers (see Change_Log)', span=10)
+    _sheet_title(ws, 'CLEANED DATA', 'Standardised copy: trimmed text, unified case, parsed dates, MISSING markers (see Change_Log). Data validation (dropdowns/ranges) applied for future edits.', span=10)
     _write_table(ws, cleaned, 3, date_cols=date_cols,
                  number_cols={c for c in cleaned.columns if str(cleaned[c].dtype) in ('int64', 'float64', 'Int64')})
     ws.freeze_panes = 'A4'
     if len(cleaned.columns):
         ws.auto_filter.ref = f'A3:{get_column_letter(len(cleaned.columns))}{3 + len(cleaned)}'
+    # apply Excel data validation (dropdowns / range checks) to data + 300 future rows
+    if rules:
+        from openpyxl.worksheet.datavalidation import DataValidation
+        end_row = 3 + len(cleaned) + 300
+        for j, c in enumerate(cleaned.columns, 1):
+            rule = next((x for x in rules if x['column'] == c), None)
+            if not rule:
+                continue
+            letter = get_column_letter(j)
+            try:
+                if rule['type'] == 'list' and c in list_src_cells:
+                    dv = DataValidation(type='list', formula1=list_src_cells[c], allow_blank=True,
+                                        showErrorMessage=True, errorTitle='Invalid entry',
+                                        error='Please pick a value from the dropdown list.')
+                elif rule['type'] == 'decimal':
+                    dv = DataValidation(type='decimal', operator='between',
+                                        formula1=str(rule['min']), formula2=str(rule['max']), allow_blank=True,
+                                        showErrorMessage=True, errorTitle='Out of range',
+                                        error=f"Value must be between {rule['min']} and {rule['max']}.")
+                elif rule['type'] == 'date':
+                    y1, m1, d1 = rule['min'].split('-')
+                    y2, m2, d2 = rule['max'].split('-')
+                    dv = DataValidation(type='date', operator='between',
+                                        formula1=f'DATE({y1},{int(m1)},{int(d1)})',
+                                        formula2=f'DATE({y2},{int(m2)},{int(d2)})', allow_blank=True,
+                                        showErrorMessage=True, errorTitle='Invalid date',
+                                        error=f"Date must be between {rule['min']} and {rule['max']}.")
+                elif rule['type'] == 'textLength':
+                    dv = DataValidation(type='textLength', operator='between',
+                                        formula1=str(rule['min']), formula2=str(rule['max']), allow_blank=True,
+                                        showErrorMessage=True, errorTitle='Invalid length',
+                                        error=f"Text length must be between {rule['min']} and {rule['max']} characters.")
+                else:
+                    continue
+                ws.add_data_validation(dv)
+                dv.add(f'{letter}4:{letter}{end_row}')
+            except Exception:
+                pass
+
+    # ---------------- Merged_Data (join result) ---------------- #
+    merged_df = result.get('merged_data')
+    if merged_df is not None:
+        jr = result.get('join_report') or {}
+        ws = wb.create_sheet('Merged_Data')
+        _sheet_title(ws, 'MERGED DATA (JOIN RESULT)',
+                     f"{jr.get('left_sheet','?')} [{jr.get('left_key','?')}] LEFT-joined with "
+                     f"{jr.get('right_sheet','?')} [{jr.get('right_key','?')}] - {jr.get('result_rows','?')} rows. "
+                     'Full join report in Assumptions sheet.', span=10)
+        _write_table(ws, merged_df, 3,
+                     number_cols={c for c in merged_df.columns if str(merged_df[c].dtype) in ('int64', 'float64', 'Int64')},
+                     date_cols={c for c in merged_df.columns if 'datetime' in str(merged_df[c].dtype)})
+        ws.freeze_panes = 'A4'
+        if len(merged_df.columns):
+            ws.auto_filter.ref = f'A3:{get_column_letter(len(merged_df.columns))}{3 + len(merged_df)}'
 
     # sheet order
-    order = ['Read_Me', 'Dashboard', 'Summary', 'Pivot_Analysis', 'Rankings', 'Exception_Report',
-             'Data_Quality', 'Change_Log', 'Assumptions', 'Calculations', 'Raw_Data', 'Cleaned_Data', 'Chart_Data']
+    order = ['Read_Me', 'Dashboard', 'Summary', 'Pivot_Analysis', 'Data_Dictionary', 'Rankings',
+             'Exception_Report', 'Validation_Rules', 'Power_Query', 'Data_Quality', 'Change_Log',
+             'Assumptions', 'Calculations', 'Merged_Data', 'Raw_Data', 'Cleaned_Data', 'Chart_Data']
     wb._sheets = [wb[n] for n in order if n in wb.sheetnames] + [s for s in wb._sheets if s.title not in order]
     wb.active = 0
 
@@ -624,7 +768,8 @@ def _pivot_df(p):
     if p['has_measure']:
         return pd.DataFrame([{
             p['dimension']: x['label'], 'Records': x['count'], 'Sum': x['sum'],
-            'Average': x['avg'], 'Share %': x['pct'],
+            'Average': x['avg'], 'Min': x.get('min'), 'Max': x.get('max'),
+            'Median': x.get('median'), 'Share %': x['pct'],
         } for x in p['rows']])
     return pd.DataFrame([{
         p['dimension']: x['label'], 'Records': x['count'], 'Share %': x['pct'],
